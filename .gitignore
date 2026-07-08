@@ -1,0 +1,12 @@
+.DS_Store
+.Rhistory
+.Rapp.history
+.RData
+.Rproj.user/
+*.Rcheck/
+~$*
+__pycache__/
+*.pyc
+.venv/
+.ipynb_checkpoints/
+node_modules/

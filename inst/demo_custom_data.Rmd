@@ -1,0 +1,319 @@
+---
+title: "RFmstate Demo: Custom Clinical Data with Date Variables"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  fig.width = 7,
+  fig.height = 5,
+  message = FALSE,
+  warning = FALSE
+)
+```
+
+## 1. Simulate Raw Clinical Data
+
+We simulate a dataset with date-based event times, as one might receive
+from a clinical database. Patients start treatment and may experience
+heart failure, be cured, or die. **Cured** and **Death** are absorbing
+states; **Heart Failure** is a transient intermediate state.
+
+```{r simulate-data}
+set.seed(2026)
+n <- 400
+
+record_id <- seq_len(n)
+gender <- sample(c("Male", "Female"), n, replace = TRUE)
+trt <- sample(c("Drug A", "Drug B"), n, replace = TRUE)
+weight <- round(rnorm(n, mean = 75, sd = 15), 1)
+
+# Treatment start dates spread over 2 years
+trt_date <- as.Date("2020-01-01") + sample(0:730, n, replace = TRUE)
+
+# Simulate trajectories manually
+heart_failure_date <- rep(as.Date(NA), n)
+cured_date <- rep(as.Date(NA), n)
+death_date <- rep(as.Date(NA), n)
+last_followup_date <- rep(as.Date(NA), n)
+
+for (i in seq_len(n)) {
+  # From Treatment state, competing events:
+  #   -> Heart Failure (rate depends on weight, treatment)
+  #   -> Cured (rate depends on treatment)
+  #   -> Death (rate depends on weight)
+  trt_effect <- ifelse(trt[i] == "Drug A", 0.7, 1.0)
+  wt_effect <- exp((weight[i] - 75) / 50)
+
+  t_hf <- rweibull(1, shape = 1.3, scale = 300 * trt_effect * wt_effect)
+  t_cured <- rweibull(1, shape = 1.5, scale = 250 / trt_effect)
+  t_death <- rweibull(1, shape = 1.0, scale = 800 * (1 / wt_effect))
+
+  first_event <- which.min(c(t_hf, t_cured, t_death))
+  first_time <- c(t_hf, t_cured, t_death)[first_event]
+
+  # Censoring at 3 years
+  cens_time <- runif(1, 400, 1095)
+
+  if (first_time > cens_time) {
+    # Censored from Treatment state
+    last_followup_date[i] <- trt_date[i] + round(cens_time)
+    next
+  }
+
+  if (first_event == 1) {
+    # Heart Failure reached
+    heart_failure_date[i] <- trt_date[i] + round(first_time)
+
+    # From Heart Failure: -> Cured or -> Death
+    t_cured2 <- rweibull(1, shape = 1.4, scale = 200 / trt_effect)
+    t_death2 <- rweibull(1, shape = 1.2, scale = 400 * (1 / wt_effect))
+
+    second_event <- which.min(c(t_cured2, t_death2))
+    second_time <- first_time + c(t_cured2, t_death2)[second_event]
+
+    if (second_time > cens_time) {
+      last_followup_date[i] <- trt_date[i] + round(cens_time)
+    } else if (second_event == 1) {
+      cured_date[i] <- trt_date[i] + round(second_time)
+    } else {
+      death_date[i] <- trt_date[i] + round(second_time)
+    }
+  } else if (first_event == 2) {
+    cured_date[i] <- trt_date[i] + round(first_time)
+  } else {
+    death_date[i] <- trt_date[i] + round(first_time)
+  }
+}
+
+raw_data <- data.frame(
+  record_id = record_id,
+  gender = gender,
+  trt = trt,
+  weight = weight,
+  trt_date = trt_date,
+  cured_date = cured_date,
+  heart_failure_date = heart_failure_date,
+  death_date = death_date,
+  last_followup_date = last_followup_date,
+  stringsAsFactors = FALSE
+)
+
+head(raw_data, 10)
+```
+
+## 2. Compute Time-to-Event from Treatment Date
+
+Convert date columns to days since treatment start.
+
+```{r compute-times}
+dat <- data.frame(
+  record_id = raw_data$record_id,
+  gender = as.integer(raw_data$gender == "Male"),
+  trt = as.integer(raw_data$trt == "Drug A"),
+  weight = raw_data$weight,
+  time_HeartFailure = as.numeric(
+    difftime(raw_data$heart_failure_date, raw_data$trt_date, units = "days")
+  ),
+  time_Cured = as.numeric(
+    difftime(raw_data$cured_date, raw_data$trt_date, units = "days")
+  ),
+  time_Death = as.numeric(
+    difftime(raw_data$death_date, raw_data$trt_date, units = "days")
+  ),
+  time_censored = as.numeric(
+    difftime(raw_data$last_followup_date, raw_data$trt_date, units = "days")
+  ),
+  stringsAsFactors = FALSE
+)
+
+head(dat, 10)
+```
+
+Quick summary of event counts:
+
+```{r event-summary}
+cat("Total patients:", nrow(dat), "\n")
+cat("Heart failure observed:", sum(!is.na(dat$time_HeartFailure)), "\n")
+cat("Cured:", sum(!is.na(dat$time_Cured)), "\n")
+cat("Death:", sum(!is.na(dat$time_Death)), "\n")
+cat("Censored (no absorbing state):", sum(!is.na(dat$time_censored)), "\n")
+```
+
+## 3. Define Multistate Structure
+
+```{r define-structure}
+library(RFmstate)
+
+ms <- define_multistate(
+  state_names = c("Treatment", "HeartFailure", "Cured", "Death"),
+  absorbing = c("Cured", "Death"),
+  transitions = list(
+    Treatment = c("HeartFailure", "Cured", "Death"),
+    HeartFailure = c("Cured", "Death")
+  )
+)
+print(ms)
+```
+
+## 4. Prepare Multistate Data
+
+```{r prepare-data}
+msdata <- prepare_data(
+  data = dat,
+  id = "record_id",
+  structure = ms,
+  time_map = list(
+    HeartFailure = "time_HeartFailure",
+    Cured = "time_Cured",
+    Death = "time_Death"
+  ),
+  censor_col = "time_censored",
+  covariates = c("gender", "trt", "weight")
+)
+print(msdata)
+```
+
+## 5. Transition Diagram
+
+```{r transition-diagram, fig.cap="State transition diagram with event counts."}
+plot_transition_diagram(ms, msdata)
+```
+
+## 6. Aalen-Johansen Nonparametric Estimates
+
+```{r aalen-johansen}
+aj <- aalen_johansen(msdata)
+print(aj)
+```
+
+```{r aj-state-occ, fig.cap="State occupation probabilities (Aalen-Johansen)."}
+plot(aj, type = "state_occupation")
+```
+
+```{r aj-cum-hazard, fig.cap="Nelson-Aalen cumulative hazards by transition."}
+plot(aj, type = "cumulative_hazard")
+```
+
+```{r aj-trans-prob, fig.cap="Transition probabilities from Treatment state (AJ)."}
+plot(aj, type = "stacked_transition_prob")
+```
+
+```{r aj-trans-intensity, fig.cap="Transition intensities over time (AJ)."}
+plot(aj, type = "transition_intensity")
+```
+
+## 7. Fit Random Forest Model
+
+```{r fit-model}
+fit <- rfmstate(
+  msdata,
+  covariates = c("gender", "trt", "weight"),
+  num.trees = 500,
+  min.node.size = 15,
+  seed = 2026
+)
+print(fit)
+```
+
+## 8. Model Summary
+
+```{r model-summary}
+s <- summary(fit)
+```
+
+## 9. Feature Importance
+
+```{r importance-bar, fig.cap="Feature importance per transition."}
+imp <- importance(fit)
+print(imp)
+plot(imp, type = "barplot")
+```
+
+```{r importance-heat, fig.cap="Feature importance heatmap."}
+plot(imp, type = "heatmap")
+```
+
+## 10. Predict for New Patients
+
+```{r predict-new}
+new_patients <- data.frame(
+  gender = c(1, 0, 1),
+  trt = c(1, 0, 1),
+  weight = c(65, 90, 75)
+)
+rownames(new_patients) <- c("Light male, Drug A",
+                             "Heavy female, Drug B",
+                             "Average male, Drug A")
+print(new_patients)
+
+pred <- predict(fit, newdata = new_patients, times = seq(30, 1000, by = 30))
+print(pred)
+```
+
+```{r pred-subject1, fig.cap="Predicted state occupation: light male on Drug A."}
+plot(pred, type = "state_occupation", subject = 1)
+```
+
+```{r pred-subject2, fig.cap="Predicted state occupation: heavy female on Drug B."}
+plot(pred, type = "state_occupation", subject = 2)
+```
+
+```{r pred-subject3, fig.cap="Predicted state occupation: average male on Drug A."}
+plot(pred, type = "state_occupation", subject = 3)
+```
+
+```{r pred-trans, fig.cap="Predicted transition probabilities: light male on Drug A."}
+plot(pred, type = "transition_prob", subject = 1)
+```
+
+## 11. Diagnostics
+
+```{r diagnostics}
+diag <- diagnose(fit)
+print(diag)
+```
+
+```{r brier, fig.cap="Time-dependent Brier score by transition."}
+plot(diag, type = "brier")
+```
+
+```{r concordance, fig.cap="Concordance index by transition."}
+plot(diag, type = "concordance")
+```
+
+```{r bias-variance, fig.cap="Bias-variance decomposition by transition."}
+plot(diag, type = "bias_variance")
+```
+
+## 12. Comparing Treatment Arms
+
+We can compare predicted outcomes between Drug A and Drug B for an
+average patient.
+
+```{r compare-arms}
+drug_a <- data.frame(gender = 1, trt = 1, weight = 75)
+drug_b <- data.frame(gender = 1, trt = 0, weight = 75)
+
+pred_a <- predict(fit, newdata = drug_a, times = seq(30, 1000, by = 30))
+pred_b <- predict(fit, newdata = drug_b, times = seq(30, 1000, by = 30))
+
+times <- pred_a$time
+states <- ms$state_names
+
+par(mfrow = c(2, 2), mar = c(4, 4, 3, 1))
+cols <- c("#1b9e77", "#d95f02")
+for (j in seq_along(states)) {
+  occ_a <- pred_a$state_occ[1, j, ]
+  occ_b <- pred_b$state_occ[1, j, ]
+  plot(times, occ_a, type = "l", col = cols[1], lwd = 2,
+       ylim = c(0, max(c(occ_a, occ_b)) * 1.1),
+       xlab = "Days", ylab = "Probability",
+       main = states[j])
+  lines(times, occ_b, col = cols[2], lwd = 2)
+  legend("topright", legend = c("Drug A", "Drug B"),
+         col = cols, lwd = 2, bty = "n", cex = 0.8)
+}
+```

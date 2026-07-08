@@ -1,0 +1,8 @@
+\.DS_Store$
+^demo_custom_data\.Rmd$
+^demo_custom_data\.html$
+^cran-comments\.md$
+^\.gitignore$
+^RFmstate\.Rcheck$
+^RFmstate.*\.tar\.gz$
+^figure$
