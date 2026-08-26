@@ -23,6 +23,9 @@
 #'     \item{n_transitions}{Total number of allowed transitions.}
 #'     \item{trans_list}{Data frame listing all transitions with columns
 #'       \code{trans_id}, \code{from}, \code{to}.}
+#'     \item{initial_state}{The unique graph root used as the common initial
+#'       state.}
+#'     \item{topological_order}{State order used by the semi-Markov solver.}
 #'   }
 #'
 #' @examples
@@ -39,32 +42,49 @@
 #'
 #' @export
 define_multistate <- function(state_names, absorbing, transitions) {
-  # Validate inputs
   if (!is.character(state_names) || length(state_names) < 2) {
     stop("'state_names' must be a character vector with at least 2 states.")
   }
-  if (any(duplicated(state_names))) {
-    stop("'state_names' must not contain duplicates.")
+  if (anyNA(state_names) || any(!nzchar(state_names)) ||
+      anyDuplicated(state_names)) {
+    stop("'state_names' must contain unique, nonmissing, nonempty names.")
   }
-  if (!is.character(absorbing) || length(absorbing) < 1) {
+  if (!is.character(absorbing) || length(absorbing) < 1L ||
+      anyNA(absorbing) || anyDuplicated(absorbing)) {
     stop("'absorbing' must be a character vector with at least 1 absorbing state.")
   }
   if (!all(absorbing %in% state_names)) {
     stop("All absorbing states must be in 'state_names'.")
   }
-  if (!is.list(transitions)) {
+  if (!is.list(transitions) || is.null(names(transitions)) ||
+      anyNA(names(transitions)) || any(!nzchar(names(transitions))) ||
+      anyDuplicated(names(transitions))) {
     stop("'transitions' must be a named list.")
   }
 
   transient <- setdiff(state_names, absorbing)
 
-  # Validate transitions
+  extra_origins <- setdiff(names(transitions), transient)
+  if (length(extra_origins)) {
+    stop("Transition origin(s) must be transient states: ",
+         paste(extra_origins, collapse = ", "), ".")
+  }
+  missing_origins <- setdiff(transient, names(transitions))
+  if (length(missing_origins)) {
+    stop("Transient state(s) missing from 'transitions': ",
+         paste(missing_origins, collapse = ", "))
+  }
+
   for (nm in names(transitions)) {
-    if (!(nm %in% transient)) {
-      stop("Transition origin '", nm,
-           "' must be a transient (non-absorbing) state.")
-    }
     dests <- transitions[[nm]]
+    if (!is.character(dests) || !length(dests) || anyNA(dests) ||
+        any(!nzchar(dests))) {
+      stop("Destinations from '", nm,
+           "' must be a nonempty character vector without missing values.")
+    }
+    if (anyDuplicated(dests)) {
+      stop("Duplicated directed edge(s) from '", nm, "' are not allowed.")
+    }
     if (!all(dests %in% state_names)) {
       bad <- setdiff(dests, state_names)
       stop("Unknown destination state(s) in transitions from '", nm, "': ",
@@ -73,13 +93,6 @@ define_multistate <- function(state_names, absorbing, transitions) {
     if (nm %in% dests) {
       stop("Self-transitions not allowed: state '", nm, "'.")
     }
-  }
-
-  # Check all transient states have outgoing transitions
-  missing_origins <- setdiff(transient, names(transitions))
-  if (length(missing_origins) > 0) {
-    stop("Transient state(s) missing from 'transitions': ",
-         paste(missing_origins, collapse = ", "))
   }
 
   # Build transition matrix
@@ -110,6 +123,12 @@ define_multistate <- function(state_names, absorbing, transitions) {
     }
   }
 
+  graph_info <- .validate_dag(
+    state_names = state_names,
+    absorbing = absorbing,
+    trans_list = trans_list
+  )
+
   structure(
     list(
       state_names = state_names,
@@ -119,9 +138,87 @@ define_multistate <- function(state_names, absorbing, transitions) {
       transitions = transitions,
       trans_matrix = tmat,
       n_transitions = trans_id,
-      trans_list = trans_list
+      trans_list = trans_list,
+      initial_state = graph_info$initial_state,
+      topological_order = graph_info$topological_order,
+      graph_validation = graph_info
     ),
     class = "mstate_structure"
+  )
+}
+
+#' Validate the supported single-root DAG contract
+#' @noRd
+.validate_dag <- function(state_names, absorbing, trans_list) {
+  indegree <- stats::setNames(integer(length(state_names)), state_names)
+  for (to in trans_list$to) indegree[to] <- indegree[to] + 1L
+
+  roots <- state_names[indegree == 0L]
+  if (length(roots) != 1L) {
+    stop("The supported cohort graph must have exactly one common initial ",
+         "state with no incoming edge; found ", length(roots), ": ",
+         paste(roots, collapse = ", "), ".")
+  }
+  initial_state <- roots[[1L]]
+  if (initial_state %in% absorbing) {
+    stop("The common initial state must be transient.")
+  }
+
+  work_indegree <- indegree
+  queue <- state_names[work_indegree == 0L]
+  topo <- character(0)
+  while (length(queue)) {
+    node <- queue[[1L]]
+    queue <- queue[-1L]
+    topo <- c(topo, node)
+    children <- trans_list$to[trans_list$from == node]
+    for (child in children) {
+      work_indegree[child] <- work_indegree[child] - 1L
+      if (work_indegree[child] == 0L) {
+        candidates <- c(queue, child)
+        queue <- state_names[state_names %in% candidates]
+      }
+    }
+  }
+  if (length(topo) != length(state_names)) {
+    cyclic <- state_names[work_indegree > 0L]
+    stop("Directed cycles/recurrent state structures are unsupported; ",
+         "cycle involves: ", paste(cyclic, collapse = ", "), ".")
+  }
+
+  reachable <- initial_state
+  frontier <- initial_state
+  while (length(frontier)) {
+    children <- unique(trans_list$to[trans_list$from %in% frontier])
+    new <- setdiff(children, reachable)
+    reachable <- c(reachable, new)
+    frontier <- new
+  }
+  unreachable <- setdiff(state_names, reachable)
+  if (length(unreachable)) {
+    stop("State(s) unreachable from common initial state '", initial_state,
+         "': ", paste(unreachable, collapse = ", "), ".")
+  }
+
+  can_absorb <- absorbing
+  repeat {
+    parents <- unique(trans_list$from[trans_list$to %in% can_absorb])
+    enlarged <- union(can_absorb, parents)
+    if (length(enlarged) == length(can_absorb)) break
+    can_absorb <- enlarged
+  }
+  no_absorbing_path <- setdiff(setdiff(state_names, absorbing), can_absorb)
+  if (length(no_absorbing_path)) {
+    stop("Transient state(s) without a directed path to absorption: ",
+         paste(no_absorbing_path, collapse = ", "), ".")
+  }
+
+  list(
+    valid = TRUE,
+    initial_state = initial_state,
+    topological_order = topo,
+    indegree = indegree,
+    reachable = reachable
   )
 }
 
@@ -130,6 +227,9 @@ print.mstate_structure <- function(x, ...) {
   cat("Multistate Structure\n")
   cat("  States:", paste(x$state_names, collapse = " -> "), "\n")
   cat("  Absorbing:", paste(x$absorbing, collapse = ", "), "\n")
+  cat("  Common initial state:", x$initial_state, "\n")
+  cat("  Computational order:",
+      paste(x$topological_order, collapse = " -> "), "\n")
   cat("  Transitions:", x$n_transitions, "\n")
   for (i in seq_len(nrow(x$trans_list))) {
     cat("    ", x$trans_list$trans_id[i], ": ",

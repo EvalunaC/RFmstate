@@ -2,7 +2,7 @@
 % Please edit documentation in R/fit_rfmstate.R
 \name{rfmstate}
 \alias{rfmstate}
-\title{Fit Random Forest Multistate Model}
+\title{Fit Clock-Reset Random-Forest Multistate Models}
 \usage{
 rfmstate(
   msdata,
@@ -10,6 +10,8 @@ rfmstate(
   num.trees = 1000L,
   mtry = NULL,
   min.node.size = 15L,
+  min_events = 5L,
+  sparse_warning = 50L,
   importance = "permutation",
   seed = NULL,
   ...
@@ -18,75 +20,60 @@ rfmstate(
 \arguments{
 \item{msdata}{An \code{msdata} object from \code{\link{prepare_data}}.}
 
-\item{covariates}{Character vector of covariate column names to use as
-predictors. If \code{NULL}, all non-structural columns are used.}
+\item{covariates}{Predictor names. \code{NULL} uses the stored preparation
+schema.}
 
-\item{num.trees}{Integer, number of trees per forest (default 1000).}
+\item{num.trees}{Number of trees per edge forest.}
 
-\item{mtry}{Integer, number of variables to try at each split. Default
-\code{NULL} uses \code{floor(sqrt(p))} where p is number of covariates.}
+\item{mtry}{Number of predictors considered at a split.}
 
-\item{min.node.size}{Integer, minimum node size (default 15).}
+\item{min.node.size}{Ranger minimum node size.}
 
-\item{importance}{Character, variable importance mode. One of
-\code{"permutation"} (default), \code{"impurity"}, or \code{"none"}.}
+\item{min_events}{Explicit technical safeguard for target events per edge.
+It is not a universal adequacy threshold.}
 
-\item{seed}{Integer, random seed for reproducibility (default \code{NULL}).}
+\item{sparse_warning}{Warn for edges below this event count; set
+\code{Inf} to disable.}
 
-\item{...}{Additional arguments passed to \code{\link[ranger]{ranger}}.}
+\item{importance}{Ranger importance mode.}
+
+\item{seed}{Reproducibility seed.}
+
+\item{...}{Supported ranger controls: \code{replace},
+\code{sample.fraction}, \code{splitrule}, \code{num.random.splits},
+\code{respect.unordered.factors}, \code{num.threads},
+\code{save.memory}, \code{max.depth}, \code{always.split.variables},
+\code{alpha}, \code{minprop}, and \code{verbose}. Unnamed, conflicting,
+and unknown arguments are rejected.}
 }
 \value{
-An object of class \code{"rfmstate"} containing:
-  \describe{
-    \item{models}{Named list of fitted \code{ranger} objects, one per
-      origin state.}
-    \item{structure}{The multistate structure.}
-    \item{covariates}{Character vector of covariate names used.}
-    \item{origin_data}{Named list of per-origin-state data subsets.}
-    \item{event_times}{Named list of unique event times per origin state.}
-    \item{call}{The matched call.}
-    \item{params}{List of tuning parameters used.}
-  }
+An \code{rfmstate} object containing all edge models, schemas,
+  event/support metadata, OOB information, and the approved clock-reset
+  time-scale contract.
 }
 \description{
-Fits transition-specific cause-specific random survival forests for
-multistate survival analysis. For each transient origin state, a competing
-risks model is fit using random forests, where the competing events are
-the possible transitions to destination states.
+Fits one ranger cause-specific survival forest for every declared edge of a
+validated acyclic, non-recurrent multistate structure. Forest response time
+is duration since fresh entry into the origin state.
 }
 \details{
-For each transient state \eqn{h}, the method:
-\enumerate{
-  \item Subsets all intervals where the patient is in state \eqn{h}.
-  \item Defines time as the duration in state \eqn{h} (Tstop - Tstart).
-  \item Codes competing events: 0 = censored, 1, 2, ... for each possible
-    destination state.
-  \item Fits a cause-specific random survival forest using
-    \code{\link[ranger]{ranger}} with \code{survival} tree type.
-}
-
-Transition probabilities are then computed by combining per-origin-state
-predicted cumulative hazards via the product-integral formula.
+Every competing exit from an origin state remains an observed exit
+  for that sojourn, but is coded as a non-target outcome in the binary
+  cause-specific forest for a particular edge. An unestimable declared edge
+  stops the whole fit; it is never omitted or represented by zero hazard.
 }
 \examples{
 \donttest{
 ms <- clinical_states()
-set.seed(42)
-dat <- sim_clinical_data(n = 200, structure = ms)
-msdata <- prepare_data(
-  data = dat, id = "ID", structure = ms,
-  time_map = list(
-    Responded = "time_Responded",
-    Unresponded = "time_Unresponded",
-    Stabilized = "time_Stabilized",
-    Progressed = "time_Progressed",
-    Death = "time_Death"
-  ),
-  censor_col = "time_censored",
-  covariates = c("age", "sex", "BMI", "treatment")
+dat <- sim_clinical_data(300, structure = ms, seed = 42)
+long <- prepare_data(
+  dat, "ID", ms,
+  list(Responded="time_Responded", Unresponded="time_Unresponded",
+       Stabilized="time_Stabilized", Progressed="time_Progressed",
+       Death="time_Death"),
+  "time_censored", c("age", "sex", "BMI", "treatment")
 )
-fit <- rfmstate(msdata, covariates = c("age", "sex", "BMI", "treatment"))
-print(fit)
+fit <- rfmstate(long, num.trees = 100, min_events = 3, seed = 42)
 }
 
 }

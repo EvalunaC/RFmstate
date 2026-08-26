@@ -6,14 +6,16 @@
 #' @param x An \code{aj_estimate} object.
 #' @param type Character, one of \code{"state_occupation"} (default),
 #'   \code{"stacked_transition_prob"}, \code{"cumulative_hazard"},
-#'   \code{"transition_intensity"}.
+#'   \code{"hazard_increment"}. The legacy \code{"transition_intensity"}
+#'   alias warns because increments are not intensities.
 #' @param states Character vector of states to plot (default: all).
-#'   For \code{"transition_intensity"}, filters by destination state.
-#' @param ci Logical, whether to show confidence intervals (default
-#'   \code{TRUE}).
+#'   For hazard increments, filters by destination state.
+#' @param ci Deprecated compatibility argument. Confidence intervals are not
+#'   available because no validated AJ covariance is returned.
 #' @param col Colors for each state/transition. If \code{NULL}, default
 #'   palette is used.
 #' @param main Title (default: auto-generated).
+#' @param xlab,ylab Axis labels.
 #' @param ... Additional arguments passed to \code{\link{plot}}.
 #'
 #' @return The input \code{x} object, returned invisibly. Called for its
@@ -23,12 +25,19 @@
 plot.aj_estimate <- function(x, type = c("state_occupation",
                                           "stacked_transition_prob",
                                           "cumulative_hazard",
+                                          "hazard_increment",
                                           "transition_intensity"),
-                             states = NULL, ci = TRUE, col = NULL,
-                             main = NULL, ...) {
+                             states = NULL, ci = FALSE, col = NULL,
+                             main = NULL, xlab = "Time", ylab = NULL, ...) {
   type <- match.arg(type)
 
   if (is.null(states)) states <- x$structure$state_names
+  invalid <- setdiff(states, x$structure$state_names)
+  if (length(invalid)) stop("Unknown state(s): ", paste(invalid, collapse = ", "))
+  if (isTRUE(ci)) {
+    warning("AJ confidence intervals are unavailable: no validated covariance ",
+            "is returned.", call. = FALSE)
+  }
   ns <- length(states)
   if (is.null(col)) col <- .default_palette(ns)
   if (length(col) < ns) col <- rep_len(col, ns)
@@ -37,20 +46,30 @@ plot.aj_estimate <- function(x, type = c("state_occupation",
     "state_occupation" = {
       if (is.null(main)) main <- "State Occupation Probabilities (AJ)"
       .plot_state_occ(x$time, x$state_occ, states,
-                      x$structure$state_names, col, main, ci,
-                      x$variance, ...)
+                      x$structure$state_names, col, main, xlab,
+                      ylab %||% "State-occupation probability", ...)
     },
     "stacked_transition_prob" = {
       if (is.null(main)) main <- "Stacked Transition Probabilities (AJ)"
-      .plot_trans_prob_aj(x, states, col, main, ...)
+      .plot_trans_prob_aj(x, states, col, main, xlab,
+                          ylab %||% "State-occupation probability", ...)
     },
     "cumulative_hazard" = {
       if (is.null(main)) main <- "Cumulative Hazards (Nelson-Aalen)"
-      .plot_cum_hazard_aj(x, col, main, ...)
+      .plot_cum_hazard_aj(x, col, main, xlab,
+                          ylab %||% "Cumulative cause-specific hazard", ...)
+    },
+    "hazard_increment" = {
+      if (is.null(main)) main <- "Nelson-Aalen Hazard Increments"
+      .plot_hazard_increment_aj(x, states, col, main, xlab,
+                                ylab %||% "Nelson-Aalen hazard increment", ...)
     },
     "transition_intensity" = {
-      if (is.null(main)) main <- "Transition Intensities"
-      .plot_trans_intensity_aj(x, states, col, main, ...)
+      warning("type = 'transition_intensity' is deprecated; use ",
+              "type = 'hazard_increment'.", call. = FALSE)
+      if (is.null(main)) main <- "Nelson-Aalen Hazard Increments"
+      .plot_hazard_increment_aj(x, states, col, main, xlab,
+                                ylab %||% "Nelson-Aalen hazard increment", ...)
     }
   )
   invisible(x)
@@ -68,6 +87,8 @@ plot.aj_estimate <- function(x, type = c("state_occupation",
 #'   mean across all subjects.
 #' @param col Colors. If \code{NULL}, default palette is used.
 #' @param main Title.
+#' @param states Occupied states to display.
+#' @param xlab,ylab Axis labels.
 #' @param ... Additional arguments passed to \code{\link{plot}}.
 #'
 #' @return The input \code{x} object, returned invisibly. Called for its
@@ -77,9 +98,13 @@ plot.aj_estimate <- function(x, type = c("state_occupation",
 plot.rfmstate_pred <- function(x, type = c("state_occupation",
                                             "transition_prob"),
                                subject = 1L, col = NULL,
-                               main = NULL, ...) {
+                               main = NULL, states = NULL,
+                               xlab = "Elapsed duration", ylab = NULL, ...) {
   type <- match.arg(type)
   state_names <- x$structure$state_names
+  if (is.null(states)) states <- state_names
+  invalid <- setdiff(states, state_names)
+  if (length(invalid)) stop("Unknown state(s): ", paste(invalid, collapse = ", "))
   ns <- length(state_names)
 
   if (is.null(col)) col <- .default_palette(ns)
@@ -102,7 +127,8 @@ plot.rfmstate_pred <- function(x, type = c("state_occupation",
       if (is.null(main)) {
         main <- paste("Predicted State Occupation -", subj_label)
       }
-      .plot_state_occ_pred(x$time, occ, state_names, col, main, ...)
+      .plot_state_occ_pred(x$time, occ, state_names, states, col, main,
+                           xlab, ylab %||% "State-occupation probability", ...)
     },
     "transition_prob" = {
       if (is.null(main)) {
@@ -113,7 +139,9 @@ plot.rfmstate_pred <- function(x, type = c("state_occupation",
       } else {
         P_mean <- x$P[subject, , , ]
       }
-      .plot_trans_prob_pred(x$time, P_mean, state_names, col, main, ...)
+      .plot_trans_prob_pred(x$time, P_mean, state_names, states,
+                            x$start_state, col, main, xlab,
+                            ylab %||% "Entry-conditioned state probability", ...)
     }
   )
   invisible(x)
@@ -155,37 +183,35 @@ plot.rfmstate_importance <- function(x,
 
 #' Plot Diagnostics
 #'
-#' Visualizes diagnostic measures including Brier score curves,
-#' concordance indices, and bias-variance decomposition.
+#' Visualizes genuine edge OOB concordance or patient-level cross-validated
+#' full-state Brier scores.
 #'
 #' @param x An \code{rfmstate_diag} object.
 #' @param type Character, one of \code{"brier"} (default),
-#'   \code{"concordance"}, \code{"bias_variance"}.
+#'   \code{"concordance"}.
 #' @param col Colors.
 #' @param main Title.
+#' @param xlab,ylab Axis labels.
 #' @param ... Additional arguments.
 #'
 #' @return The input \code{x} object, returned invisibly. Called for its
 #'   side effect of producing a plot.
 #'
 #' @export
-plot.rfmstate_diag <- function(x, type = c("brier", "concordance",
-                                            "bias_variance"),
-                               col = NULL, main = NULL, ...) {
+plot.rfmstate_diag <- function(x, type = c("brier", "concordance"),
+                               col = NULL, main = NULL,
+                               xlab = NULL, ylab = NULL, ...) {
   type <- match.arg(type)
 
   switch(type,
     "brier" = {
       if (is.null(main)) main <- "Time-Dependent Brier Score"
-      .plot_brier(x, col, main, ...)
+      .plot_brier(x, col, main, xlab %||% "Time",
+                  ylab %||% "Cross-validated Brier score", ...)
     },
     "concordance" = {
       if (is.null(main)) main <- "Concordance Index by Transition"
-      .plot_concordance(x, col, main, ...)
-    },
-    "bias_variance" = {
-      if (is.null(main)) main <- "Bias-Variance Decomposition"
-      .plot_bias_variance(x, col, main, ...)
+      .plot_concordance(x, col, main, ylab %||% "OOB C-index", ...)
     }
   )
   invisible(x)
@@ -208,25 +234,17 @@ plot.rfmstate_diag <- function(x, type = c("brier", "concordance",
 #' Plot state occupation from AJ
 #' @noRd
 .plot_state_occ <- function(times, state_occ, states, all_states,
-                            col, main, ci, variance, ...) {
+                            col, main, xlab, ylab, ...) {
   state_idx <- match(states, all_states)
 
   plot(NULL, xlim = range(times), ylim = c(0, 1),
-       xlab = "Time", ylab = "Probability",
+       xlab = xlab, ylab = ylab,
        main = main, ...)
 
   for (i in seq_along(state_idx)) {
     idx <- state_idx[i]
     lines(times, state_occ[, idx], col = col[i], lwd = 2)
 
-    if (ci && !is.null(variance)) {
-      var_vals <- vapply(variance, function(v) v[idx], numeric(1))
-      se <- sqrt(pmax(var_vals, 0))
-      upper <- pmin(state_occ[, idx] + 1.96 * se, 1)
-      lower <- pmax(state_occ[, idx] - 1.96 * se, 0)
-      polygon(c(times, rev(times)), c(upper, rev(lower)),
-              col = adjustcolor(col[i], alpha.f = 0.15), border = NA)
-    }
   }
 
   legend("topright", legend = states, col = col[seq_along(states)],
@@ -235,16 +253,17 @@ plot.rfmstate_diag <- function(x, type = c("brier", "concordance",
 
 #' Plot transition probabilities from AJ
 #' @noRd
-.plot_trans_prob_aj <- function(aj, states, col, main, ...) {
+.plot_trans_prob_aj <- function(aj, states, col, main, xlab, ylab, ...) {
   state_names <- aj$structure$state_names
   n_times <- length(aj$time)
   ns <- length(states)
 
-  # Extract P(1, j, t) for each destination state
+  # Extract the recorded initial-state row for each destination state.
+  initial_idx <- match(aj$initial_state, state_names)
   prob_mat <- matrix(0, nrow = n_times, ncol = ns)
   for (j in seq_len(ns)) {
     j_idx <- match(states[j], state_names)
-    prob_mat[, j] <- vapply(aj$trans_prob, function(P) P[1, j_idx],
+    prob_mat[, j] <- vapply(aj$trans_prob, function(P) P[initial_idx, j_idx],
                             numeric(1))
   }
 
@@ -260,7 +279,7 @@ plot.rfmstate_diag <- function(x, type = c("brier", "concordance",
   }
 
   plot(NULL, xlim = range(aj$time), ylim = c(0, 1),
-       xlab = "Time", ylab = "P(s, t)",
+       xlab = xlab, ylab = ylab,
        main = main, ...)
 
   # Draw stacked polygons from top to bottom so borders layer correctly
@@ -278,7 +297,7 @@ plot.rfmstate_diag <- function(x, type = c("brier", "concordance",
 
 #' Plot cumulative hazards from AJ
 #' @noRd
-.plot_cum_hazard_aj <- function(aj, col, main, ...) {
+.plot_cum_hazard_aj <- function(aj, col, main, xlab, ylab, ...) {
   trans_list <- aj$structure$trans_list
   n_trans <- nrow(trans_list)
   tcol <- .default_palette(n_trans)
@@ -299,7 +318,7 @@ plot.rfmstate_diag <- function(x, type = c("brier", "concordance",
   if (max_ch <= 0) max_ch <- 1
 
   plot(NULL, xlim = range(aj$time), ylim = c(0, max_ch * 1.1),
-       xlab = "Time", ylab = "Cumulative Hazard",
+       xlab = xlab, ylab = ylab,
        main = main, ...)
 
   for (tr in seq_len(n_trans)) {
@@ -311,9 +330,9 @@ plot.rfmstate_diag <- function(x, type = c("brier", "concordance",
          lwd = 2, bty = "n", cex = 0.7)
 }
 
-#' Plot transition intensities from AJ
+#' Plot Nelson-Aalen hazard increments from AJ
 #' @noRd
-.plot_trans_intensity_aj <- function(aj, states, col, main, ...) {
+.plot_hazard_increment_aj <- function(aj, states, col, main, xlab, ylab, ...) {
   state_names <- aj$structure$state_names
   trans_list <- aj$structure$trans_list
 
@@ -341,7 +360,7 @@ plot.rfmstate_diag <- function(x, type = c("brier", "concordance",
   if (max_int <= 0) max_int <- 0.1
 
   plot(NULL, xlim = range(aj$time), ylim = c(0, max_int * 1.1),
-       xlab = "Time", ylab = "Transition Intensity",
+       xlab = xlab, ylab = ylab,
        main = main, ...)
 
   # Point shape by origin state, color by destination state
@@ -371,37 +390,40 @@ plot.rfmstate_diag <- function(x, type = c("brier", "concordance",
 
 #' Plot predicted state occupation
 #' @noRd
-.plot_state_occ_pred <- function(times, occ, state_names, col, main, ...) {
-  ns <- length(state_names)
+.plot_state_occ_pred <- function(times, occ, state_names, states, col, main,
+                                 xlab, ylab, ...) {
+  state_idx <- match(states, state_names)
 
   plot(NULL, xlim = range(times), ylim = c(0, 1),
-       xlab = "Time", ylab = "Probability",
+       xlab = xlab, ylab = ylab,
        main = main, ...)
 
-  for (i in seq_len(ns)) {
-    lines(times, occ[i, ], col = col[i], lwd = 2)
+  for (i in seq_along(state_idx)) {
+    lines(times, occ[state_idx[i], ], col = col[state_idx[i]], lwd = 2)
   }
 
-  legend("topright", legend = state_names, col = col[seq_len(ns)],
+  legend("topright", legend = states, col = col[state_idx],
          lwd = 2, bty = "n", cex = 0.8)
 }
 
 #' Plot predicted transition probabilities
 #' @noRd
-.plot_trans_prob_pred <- function(times, P, state_names, col, main, ...) {
-  ns <- length(state_names)
+.plot_trans_prob_pred <- function(times, P, state_names, states, start_state,
+                                  col, main, xlab, ylab, ...) {
+  state_idx <- match(states, state_names)
+  start_idx <- match(start_state, state_names)
 
   plot(NULL, xlim = range(times), ylim = c(0, 1),
-       xlab = "Time", ylab = "Transition Probability from Baseline",
+       xlab = xlab, ylab = ylab,
        main = main, ...)
 
-  for (j in seq_len(ns)) {
-    probs <- P[1, j, ]  # From state 1 (Baseline)
-    lines(times, probs, col = col[j], lwd = 2)
+  for (j in seq_along(state_idx)) {
+    probs <- P[start_idx, state_idx[j], ]
+    lines(times, probs, col = col[state_idx[j]], lwd = 2)
   }
 
-  legend("topright", legend = paste("->", state_names),
-         col = col[seq_len(ns)], lwd = 2, bty = "n", cex = 0.8)
+  legend("topright", legend = paste(start_state, "->", states),
+         col = col[state_idx], lwd = 2, bty = "n", cex = 0.8)
 }
 
 #' Plot importance barplot
@@ -469,40 +491,20 @@ plot.rfmstate_diag <- function(x, type = c("brier", "concordance",
 
 #' Plot Brier scores
 #' @noRd
-.plot_brier <- function(diag, col, main, ...) {
+.plot_brier <- function(diag, col, main, xlab, ylab, ...) {
   brier <- diag$brier
-  n_trans <- length(brier)
-  if (is.null(col)) col <- .default_palette(n_trans)
-
-  # Find y range
-  all_brier <- unlist(lapply(brier, function(b) b$brier))
-  all_brier <- all_brier[!is.na(all_brier)]
-  if (length(all_brier) == 0) {
-    message("No valid Brier scores to plot.")
-    return(invisible(NULL))
+  if (is.null(brier) || !nrow(brier)) {
+    stop("No patient-level cross-validated Brier score is present; rerun ",
+         "diagnose(..., method = 'cv').")
   }
-
-  all_times <- unlist(lapply(brier, function(b) b$time))
-  plot(NULL, xlim = range(all_times, na.rm = TRUE),
-       ylim = c(0, max(all_brier, na.rm = TRUE) * 1.1),
-       xlab = "Time", ylab = "Brier Score",
-       main = main, ...)
-
-  for (i in seq_along(brier)) {
-    b <- brier[[i]]
-    valid <- !is.na(b$brier)
-    if (sum(valid) > 1) {
-      lines(b$time[valid], b$brier[valid], col = col[i], lwd = 2)
-    }
-  }
-
-  legend("bottomright", legend = names(brier), col = col[seq_len(n_trans)],
-         lwd = 2, bty = "n", cex = 0.6)
+  if (is.null(col)) col <- "#2c7fb8"
+  plot(brier$time, brier$brier, type = "l", lwd = 2, col = col[1L],
+       xlab = xlab, ylab = ylab, main = main, ...)
 }
 
 #' Plot concordance indices
 #' @noRd
-.plot_concordance <- function(diag, col, main, ...) {
+.plot_concordance <- function(diag, col, main, ylab, ...) {
   cdf <- diag$concordance
   n <- nrow(cdf)
   if (is.null(col)) col <- .default_palette(n)
@@ -512,33 +514,10 @@ plot.rfmstate_diag <- function(x, type = c("brier", "concordance",
 
   bp <- barplot(cdf$c_index, names.arg = cdf$transition,
                 col = col[seq_len(n)], main = main,
-                ylab = "C-index", ylim = c(0, 1),
+                ylab = ylab, ylim = c(0, 1),
                 las = 2, cex.names = 0.7, ...)
   abline(h = 0.5, lty = 2, col = "gray50")
   text(bp, cdf$c_index + 0.03, round(cdf$c_index, 3), cex = 0.8)
-}
-
-#' Plot bias-variance decomposition
-#' @noRd
-.plot_bias_variance <- function(diag, col, main, ...) {
-  bv <- diag$bias_variance
-  n <- nrow(bv)
-
-  mat <- rbind(abs(bv$bias), bv$variance)
-  rownames(mat) <- c("| Bias |", "Variance")
-
-  if (is.null(col)) col <- c("#4292c6", "#ef6548")
-
-  op <- par(mar = c(8, 4, 3, 8), xpd = TRUE)
-  on.exit(par(op))
-
-  barplot(mat, beside = TRUE, names.arg = bv$transition,
-          col = col[1:2], main = main,
-          ylab = "Value", las = 2, cex.names = 0.7, ...)
-
-  legend("topright", inset = c(-0.25, 0),
-         legend = c("| Bias |", "Variance"),
-         fill = col[1:2], bty = "n", cex = 0.8)
 }
 
 #' Plot Transition Diagram

@@ -1,13 +1,12 @@
-#' Aalen-Johansen Nonparametric Estimator
+#' Aalen-Johansen Point Estimator
 #'
 #' Computes nonparametric estimates of transition probabilities using the
 #' Aalen-Johansen estimator via Nelson-Aalen cumulative hazard increments and
 #' product-integral construction.
 #'
 #' The Aalen-Johansen estimator generalizes the Kaplan-Meier estimator to
-#' multistate models under the Markov assumption and independent right
-#' censoring. It provides population-level transition probability matrices
-#' without covariate adjustment.
+#' multistate models. RFmstate exposes it as a descriptive, covariate-free
+#' calendar-time population benchmark from the recorded common baseline.
 #'
 #' @param msdata An \code{msdata} object from \code{\link{prepare_data}}.
 #' @param s Numeric, the starting time for transition probabilities
@@ -16,14 +15,12 @@
 #' @return An object of class \code{"aj_estimate"} containing:
 #'   \describe{
 #'     \item{time}{Numeric vector of unique event times.}
-#'     \item{trans_prob}{List of transition probability matrices P(s,t) at each
-#'       event time.}
+#'     \item{trans_prob}{List of calendar-time product-integral point-estimate
+#'       matrices from the recorded common baseline at each event time.}
 #'     \item{state_occ}{Matrix of state occupation probabilities over time.
 #'       Rows are time points, columns are states.}
 #'     \item{cum_hazard}{List of Nelson-Aalen cumulative hazard matrices.}
 #'     \item{hazard_inc}{List of hazard increment matrices at each event time.}
-#'     \item{variance}{List of Greenwood-type variance estimates for state
-#'       occupation probabilities.}
 #'     \item{n_risk}{Matrix of at-risk counts over time.}
 #'     \item{n_events}{Data frame of event counts per transition.}
 #'     \item{structure}{The multistate structure used.}
@@ -54,6 +51,10 @@ aalen_johansen <- function(msdata, s = 0) {
   if (!inherits(msdata, "msdata")) {
     stop("'msdata' must be an 'msdata' object from prepare_data().")
   }
+  if (!is.numeric(s) || length(s) != 1L || !is.finite(s) || s != 0) {
+    stop("Only s = 0 is supported; left truncation and general conditional ",
+         "P(s,t) are unavailable.")
+  }
 
   structure <- attr(msdata, "structure")
   state_names <- structure$state_names
@@ -81,7 +82,6 @@ aalen_johansen <- function(msdata, s = 0) {
                        dimnames = list(NULL, state_names))
   n_risk_mat <- matrix(0, nrow = n_times, ncol = ns,
                        dimnames = list(NULL, state_names))
-  variance_list <- vector("list", n_times)
 
   # Product-integral: P(s, t_k) = prod_{j: t_j <= t_k} (I + dA(t_j))
   P_current <- diag(ns)
@@ -89,11 +89,6 @@ aalen_johansen <- function(msdata, s = 0) {
 
   cum_haz <- matrix(0, nrow = ns, ncol = ns,
                     dimnames = list(state_names, state_names))
-
-  # Greenwood-type variance computation
-  # Var(P(s,t)) approximated using Greenwood formula
-  var_occ <- rep(0, ns)
-  names(var_occ) <- state_names
 
   for (k in seq_len(n_times)) {
     t_k <- all_times[k]
@@ -130,34 +125,21 @@ aalen_johansen <- function(msdata, s = 0) {
     dimnames(increment) <- list(state_names, state_names)
     P_current <- P_current %*% increment
 
-    # Ensure non-negative probabilities (numerical safety)
-    P_current[P_current < 0] <- 0
+    if (any(!is.finite(P_current)) || min(P_current) < -1e-12 ||
+        max(P_current) > 1 + 1e-12 ||
+        max(abs(rowSums(P_current) - 1)) > 1e-10) {
+      stop("Aalen-Johansen probability invariant failed at time ", t_k, ".")
+    }
 
     trans_prob_list[[k]] <- P_current
 
-    # State occupation probabilities from initial state distribution
-    # Assuming start from state 1 (Baseline)
+    # State occupation probabilities from the recorded common initial state.
     p0 <- rep(0, ns)
-    p0[1] <- 1  # All start in state 1
+    initial_state <- attr(msdata, "initial_state")
+    if (is.null(initial_state)) initial_state <- structure$initial_state
+    p0[match(initial_state, state_names)] <- 1
     occ <- as.vector(p0 %*% P_current)
     state_occ[k, ] <- occ
-
-    # Greenwood-type variance for state occupation
-    # Simplified: Var(occ_j(t)) approx sum over event times of terms
-    var_inc <- rep(0, ns)
-    for (h in seq_len(ns)) {
-      if (n_risk[h] > 1) {
-        for (j in seq_len(ns)) {
-          if (h != j && dN[h, j] > 0) {
-            p_hj <- dA[h, j]
-            var_term <- p_hj * (1 - p_hj) / n_risk[h]
-            var_inc[j] <- var_inc[j] + var_term
-          }
-        }
-      }
-    }
-    var_occ <- var_occ + var_inc
-    variance_list[[k]] <- var_occ
   }
 
   # Event count summary
@@ -170,11 +152,13 @@ aalen_johansen <- function(msdata, s = 0) {
       state_occ = state_occ,
       cum_hazard = cum_haz_matrices,
       hazard_inc = haz_inc_matrices,
-      variance = variance_list,
       n_risk = n_risk_mat,
       n_events = event_summary,
       structure = structure,
-      s = s
+      initial_state = initial_state,
+      s = 0,
+      time_scale = "calendar time from common study origin",
+      uncertainty = "No validated variance or confidence interval is returned."
     ),
     class = "aj_estimate"
   )
@@ -255,6 +239,8 @@ print.aj_estimate <- function(x, ...) {
   cat("  Time range: [", min(x$time), ", ", max(x$time), "]\n", sep = "")
   cat("  Event times:", length(x$time), "\n")
   cat("  States:", paste(x$structure$state_names, collapse = ", "), "\n")
+  cat("  Common initial state:", x$initial_state, "\n")
+  cat("  Uncertainty: point estimates only\n")
   cat("\nEvent counts per transition:\n")
   print(x$n_events[, c("from", "to", "n_events")], row.names = FALSE)
   cat("\nFinal state occupation probabilities:\n")

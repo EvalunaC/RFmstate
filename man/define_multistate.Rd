@@ -30,6 +30,9 @@ An object of class \code{"mstate_structure"} containing:
     \item{n_transitions}{Total number of allowed transitions.}
     \item{trans_list}{Data frame listing all transitions with columns
       \code{trans_id}, \code{from}, \code{to}.}
+    \item{initial_state}{The unique graph root used as the common initial
+      state.}
+    \item{topological_order}{State order used by the semi-Markov solver.}
   }
 }
 \description{

@@ -2,33 +2,83 @@
 % Please edit documentation in R/transition_probability.R
 \name{compute_trans_prob}
 \alias{compute_trans_prob}
-\title{Compute Transition Probability Matrix via Product-Integral}
+\title{Entry-Conditioned Semi-Markov State Probabilities}
 \usage{
-compute_trans_prob(cum_hazards, structure, s = 0, times = NULL)
+compute_trans_prob(
+  cum_hazards,
+  structure,
+  s = 0,
+  times = NULL,
+  start_state = NULL,
+  grid_step = NULL,
+  target_grid_points = 1024L,
+  max_grid_points = 131073L,
+  grid_tol = 5e-04,
+  max_grid_refinements = 7L,
+  check_grid = TRUE,
+  prob_tol = 1e-08,
+  extrapolate = c("error", "flat")
+)
 }
 \arguments{
-\item{cum_hazards}{A list of cumulative hazard data frames, one per
-transition. Each should have columns \code{time} and \code{hazard}.}
+\item{cum_hazards}{Named list of data frames, one for every allowed edge.
+Names must be \code{"from->to"}; each frame contains increasing
+\code{time} and nondecreasing \code{hazard} (or \code{cum_hazard}).}
 
 \item{structure}{An \code{mstate_structure} object.}
 
-\item{s}{Numeric, starting time (default 0).}
+\item{s}{Legacy starting-time argument. Only zero is supported.}
 
-\item{times}{Numeric vector of times at which to evaluate P(s,t). If
-\code{NULL}, uses all unique event times from the cumulative hazards.}
+\item{times}{Finite nonnegative elapsed durations. If \code{NULL}, the union
+of input curve times is used.}
+
+\item{start_state}{State in which fresh entry occurs. The default is the
+common initial state stored in \code{structure}.}
+
+\item{grid_step}{Optional initial internal grid step.}
+
+\item{target_grid_points}{Initial number of regular-grid intervals when
+\code{grid_step} is not supplied.}
+
+\item{max_grid_points}{Maximum number of internal grid points.}
+
+\item{grid_tol}{Maximum probability change allowed on grid refinement.
+The default \code{5e-4} reflects discontinuous ranger hazard curves;
+analytic tests retain their separate \code{1e-3} truth-error gate.}
+
+\item{max_grid_refinements}{Maximum number of step halvings.}
+
+\item{check_grid}{Whether to require grid-refinement convergence.}
+
+\item{prob_tol}{Probability invariant tolerance.}
+
+\item{extrapolate}{Either \code{"error"} (default) or explicit
+\code{"flat"} cumulative-hazard extension.}
 }
 \value{
-An object of class \code{"trans_prob"} containing:
-  \describe{
-    \item{time}{Evaluation times.}
-    \item{P}{List of transition probability matrices at each time.}
-    \item{state_occ}{Matrix of state occupation probabilities.}
-    \item{structure}{The multistate structure.}
-    \item{s}{Starting time.}
-  }
+A \code{trans_prob} object. \code{entry_prob} and its temporary
+  alias \code{P} are arrays ordered starting state by occupied state by
+  elapsed time. \code{state_occ} is the selected starting-state slice.
 }
 \description{
-Given cause-specific cumulative hazard functions for all transitions,
-computes the full transition probability matrix P(s,t) using the
-product-integral formula.
+Combines one clock-reset cumulative cause-specific hazard curve per allowed
+edge using a regular-grid entry-mass/sojourn convolution. The result is not
+a general Markov \eqn{P(s,t)} matrix: each row is conditional on fresh entry
+into its named starting state at elapsed duration zero.
+}
+\details{
+Cumulative hazards are evaluated as right-continuous step
+functions. Within each regular interval, total exit probability is allocated
+to causes in proportion to their cumulative-hazard increments. Entry mass is
+assigned to the interval's right endpoint. Grid refinement controls these
+approximations. Probabilities are never clipped or row-normalized.
+}
+\examples{
+ms <- define_multistate(c("A", "B"), "B", list(A = "B"))
+tt <- seq(0, 2, length.out = 2001)
+hazards <- list("A->B" = data.frame(time = tt, hazard = 0.4 * tt))
+pr <- compute_trans_prob(hazards, ms, times = c(0, 1, 2),
+                         target_grid_points = 512)
+pr$state_occ
+
 }

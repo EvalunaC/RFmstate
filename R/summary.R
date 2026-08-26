@@ -44,6 +44,7 @@ summary.rfmstate <- function(object, ...) {
     n_events = integer(0),
     n_censored = integer(0),
     oob_error = numeric(0),
+    oob_concordance = numeric(0),
     stringsAsFactors = FALSE
   )
 
@@ -68,6 +69,7 @@ summary.rfmstate <- function(object, ...) {
         n_events = n_events,
         n_censored = n_censored,
         oob_error = round(oob_err, 4),
+        oob_concordance = round(1 - oob_err, 4),
         stringsAsFactors = FALSE
       ))
     }
@@ -108,23 +110,31 @@ print.summary.rfmstate <- function(x, ...) {
   cat("  Total intervals:", x$n_intervals, "\n")
 
   cat("\nCovariates:", paste(x$covariates, collapse = ", "), "\n")
+  cat("  Time scale: clock-reset duration; semi-Markov assembly\n")
 
   cat("\nForest parameters:\n")
   cat("  Trees:", x$params$num.trees, "\n")
   cat("  mtry:", x$params$mtry, "\n")
   cat("  Min node size:", x$params$min.node.size, "\n")
+  cat("  min_events safeguard:", x$params$min_events, "\n")
+  cat("  Forwarded ranger arguments:",
+      if (length(x$params$ranger_args)) {
+        paste(names(x$params$ranger_args), collapse = ", ")
+      } else {
+        "none"
+      }, "\n")
 
   cat("\nTransition-specific models:\n")
   cat(paste(rep("-", 70), collapse = ""), "\n")
-  cat(sprintf("%-25s %6s %6s %6s %10s\n",
-              "Transition", "Total", "Events", "Cens", "OOB Error"))
+  cat(sprintf("%-25s %6s %6s %6s %10s %10s\n",
+              "Transition", "Total", "Events", "Cens", "OOB Error", "OOB C"))
   cat(paste(rep("-", 70), collapse = ""), "\n")
 
   for (i in seq_len(nrow(x$trans_summary))) {
     row <- x$trans_summary[i, ]
-    cat(sprintf("%-25s %6d %6d %6d %10.4f\n",
+    cat(sprintf("%-25s %6d %6d %6d %10.4f %10.4f\n",
                 row$transition, row$n_total, row$n_events,
-                row$n_censored, row$oob_error))
+                row$n_censored, row$oob_error, row$oob_concordance))
   }
   cat(paste(rep("-", 70), collapse = ""), "\n")
 

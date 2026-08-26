@@ -201,8 +201,8 @@ plot(aj, type = "cumulative_hazard")
 plot(aj, type = "stacked_transition_prob")
 ```
 
-```{r aj-trans-intensity, fig.cap="Transition intensities over time (AJ)."}
-plot(aj, type = "transition_intensity")
+```{r aj-hazard-increment, fig.cap="Nelson-Aalen hazard increments over time (AJ)."}
+plot(aj, type = "hazard_increment")
 ```
 
 ## 7. Fit Random Forest Model
@@ -249,7 +249,14 @@ rownames(new_patients) <- c("Light male, Drug A",
                              "Average male, Drug A")
 print(new_patients)
 
-pred <- predict(fit, newdata = new_patients, times = seq(30, 1000, by = 30))
+prediction_horizon <- floor(min(fit$max_duration_by_origin))
+prediction_times <- sort(unique(c(
+  0, seq(30, prediction_horizon, by = 30), prediction_horizon
+)))
+# This date-based example has integer-day event times, so an integer-day
+# initial grid aligns with the observed hazard jumps before refinement.
+pred <- predict(fit, newdata = new_patients, times = prediction_times,
+                grid_step = 1)
 print(pred)
 ```
 
@@ -276,16 +283,17 @@ diag <- diagnose(fit)
 print(diag)
 ```
 
-```{r brier, fig.cap="Time-dependent Brier score by transition."}
-plot(diag, type = "brier")
-```
-
 ```{r concordance, fig.cap="Concordance index by transition."}
 plot(diag, type = "concordance")
 ```
 
-```{r bias-variance, fig.cap="Bias-variance decomposition by transition."}
-plot(diag, type = "bias_variance")
+Patient-level cross-validation is required for full-state IPCW Brier scores:
+
+```{r cv-brier, eval=FALSE}
+cv_diag <- diagnose(fit, method = "cv", folds = 5,
+                    eval_times = seq(0, prediction_horizon * 0.8,
+                                     length.out = 9))
+plot(cv_diag, type = "brier")
 ```
 
 ## 12. Comparing Treatment Arms
@@ -297,8 +305,10 @@ average patient.
 drug_a <- data.frame(gender = 1, trt = 1, weight = 75)
 drug_b <- data.frame(gender = 1, trt = 0, weight = 75)
 
-pred_a <- predict(fit, newdata = drug_a, times = seq(30, 1000, by = 30))
-pred_b <- predict(fit, newdata = drug_b, times = seq(30, 1000, by = 30))
+pred_a <- predict(fit, newdata = drug_a, times = prediction_times,
+                  grid_step = 1)
+pred_b <- predict(fit, newdata = drug_b, times = prediction_times,
+                  grid_step = 1)
 
 times <- pred_a$time
 states <- ms$state_names

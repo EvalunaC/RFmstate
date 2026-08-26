@@ -7,11 +7,13 @@
 \method{plot}{aj_estimate}(
   x,
   type = c("state_occupation", "stacked_transition_prob", "cumulative_hazard",
-    "transition_intensity"),
+    "hazard_increment", "transition_intensity"),
   states = NULL,
-  ci = TRUE,
+  ci = FALSE,
   col = NULL,
   main = NULL,
+  xlab = "Time",
+  ylab = NULL,
   ...
 )
 }
@@ -20,18 +22,21 @@
 
 \item{type}{Character, one of \code{"state_occupation"} (default),
 \code{"stacked_transition_prob"}, \code{"cumulative_hazard"},
-\code{"transition_intensity"}.}
+\code{"hazard_increment"}. The legacy \code{"transition_intensity"}
+alias warns because increments are not intensities.}
 
 \item{states}{Character vector of states to plot (default: all).
-For \code{"transition_intensity"}, filters by destination state.}
+For hazard increments, filters by destination state.}
 
-\item{ci}{Logical, whether to show confidence intervals (default
-\code{TRUE}).}
+\item{ci}{Deprecated compatibility argument. Confidence intervals are not
+available because no validated AJ covariance is returned.}
 
 \item{col}{Colors for each state/transition. If \code{NULL}, default
 palette is used.}
 
 \item{main}{Title (default: auto-generated).}
+
+\item{xlab, ylab}{Axis labels.}
 
 \item{...}{Additional arguments passed to \code{\link{plot}}.}
 }

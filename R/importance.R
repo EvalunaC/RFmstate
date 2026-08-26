@@ -1,7 +1,8 @@
 #' Feature Importance per Transition
 #'
 #' Extracts and organizes variable importance scores from the fitted random
-#' forest models for each transition.
+#' forest models for each transition. These are ranger permutation-importance
+#' scores based on edge-specific OOB predictive loss, not causal effects.
 #'
 #' @param object A fitted \code{rfmstate} model (must have been fit with
 #'   \code{importance != "none"}).
@@ -16,6 +17,11 @@
 #'     \item{covariates}{Covariate names.}
 #'     \item{transitions}{Character vector of transition labels.}
 #'   }
+#'
+#' @details Values are transition-specific and may have different effective
+#'   sample sizes. Negative values can arise from Monte Carlo variation, sparse
+#'   events, correlated predictors, or noise; they do not indicate protective
+#'   or causal effects. Repeated seeds/resamples are needed to assess stability.
 #'
 #' @examples
 #' \donttest{
@@ -56,10 +62,11 @@ importance.rfmstate <- function(object, ...) {
   for (state_h in names(object$models)) {
     for (dest in names(object$models[[state_h]])) {
       rf_model <- object$models[[state_h]][[dest]]
-      trans_label <- paste(state_h, "->", dest)
+      trans_label <- paste0(state_h, "->", dest)
       transitions <- c(transitions, trans_label)
 
       vi <- rf_model$variable.importance
+      n_events <- object$edge_metadata[[trans_label]]$n_events
       if (is.null(vi)) {
         vi <- stats::setNames(rep(NA_real_, length(covariates)), covariates)
       }
@@ -71,6 +78,7 @@ importance.rfmstate <- function(object, ...) {
           from = state_h,
           to = dest,
           transition = trans_label,
+          n_events = n_events,
           importance = as.numeric(val),
           stringsAsFactors = FALSE
         )

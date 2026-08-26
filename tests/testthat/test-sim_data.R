@@ -86,3 +86,20 @@ test_that("sim_clinical_data is reproducible with seed", {
   dat2 <- sim_clinical_data(n = 20, seed = 42)
   expect_identical(dat1, dat2)
 })
+
+test_that("simulation retains full precision and truncates at censoring", {
+  ms <- clinical_states()
+  dat <- sim_clinical_data(n = 500, structure = ms, seed = 42)
+  event_cols <- paste0("time_", setdiff(ms$state_names, ms$initial_state))
+  for (i in seq_len(nrow(dat))) {
+    values <- unlist(dat[i, event_cols, drop = FALSE], use.names = FALSE)
+    values <- values[!is.na(values)]
+    if (!is.na(dat$time_censored[i])) {
+      expect_true(all(values < dat$time_censored[i]))
+    }
+    expect_equal(anyDuplicated(values), 0L)
+  }
+  all_events <- unlist(dat[event_cols], use.names = FALSE)
+  all_events <- all_events[!is.na(all_events)]
+  expect_true(any(abs(all_events * 10 - round(all_events * 10)) > 1e-8))
+})

@@ -10,6 +10,9 @@
   subject = 1L,
   col = NULL,
   main = NULL,
+  states = NULL,
+  xlab = "Elapsed duration",
+  ylab = NULL,
   ...
 )
 }
@@ -25,6 +28,10 @@ mean across all subjects.}
 \item{col}{Colors. If \code{NULL}, default palette is used.}
 
 \item{main}{Title.}
+
+\item{states}{Occupied states to display.}
+
+\item{xlab, ylab}{Axis labels.}
 
 \item{...}{Additional arguments passed to \code{\link{plot}}.}
 }

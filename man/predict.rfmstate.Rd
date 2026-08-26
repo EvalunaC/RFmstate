@@ -2,62 +2,74 @@
 % Please edit documentation in R/predict.R
 \name{predict.rfmstate}
 \alias{predict.rfmstate}
-\title{Predict Transition Probabilities for New Data}
+\title{Predict Entry-Conditioned State Probabilities}
 \usage{
-\method{predict}{rfmstate}(object, newdata = NULL, times = NULL, s = 0, ...)
+\method{predict}{rfmstate}(
+  object,
+  newdata = NULL,
+  times = NULL,
+  s = 0,
+  start_state = NULL,
+  grid_step = NULL,
+  target_grid_points = 1024L,
+  max_grid_points = 131073L,
+  grid_tol = 5e-04,
+  max_grid_refinements = 7L,
+  check_grid = TRUE,
+  extrapolate = c("error", "flat"),
+  ...
+)
 }
 \arguments{
 \item{object}{A fitted \code{rfmstate} model.}
 
-\item{newdata}{A data frame with the same covariates used in fitting.
-If \code{NULL}, predictions are made for the training data.}
+\item{newdata}{Prediction profiles. \code{NULL} uses training profiles and
+labels the result apparent/training.}
 
-\item{times}{Numeric vector of times at which to compute transition
-probabilities. If \code{NULL}, uses all unique event times.}
+\item{times}{Finite nonnegative elapsed durations.}
 
-\item{s}{Numeric, starting time (default 0).}
+\item{s}{Legacy start-time argument; only zero is supported.}
+
+\item{start_state}{Fresh-entry starting state. Defaults to the common initial
+state.}
+
+\item{grid_step, target_grid_points, max_grid_points, grid_tol, max_grid_refinements, check_grid}{Numerical controls passed to the common semi-Markov solver.}
+
+\item{extrapolate}{\code{"error"} (default) or explicit \code{"flat"}
+cumulative-hazard sensitivity extension.}
 
 \item{...}{Ignored.}
 }
 \value{
-An object of class \code{"rfmstate_pred"} containing:
-  \describe{
-    \item{time}{Evaluation times.}
-    \item{P}{Array of transition probability matrices (n_subjects x
-      n_states x n_states x n_times).}
-    \item{state_occ}{Array of state occupation probabilities (n_subjects x
-      n_states x n_times).}
-    \item{cum_hazard}{List of per-subject cumulative hazard matrices.}
-    \item{structure}{The multistate structure.}
-    \item{newdata}{The prediction data.}
-  }
+An \code{rfmstate_pred} object. \code{entry_prob} and the temporary
+  alias \code{P} have dimensions profile by starting state by occupied state
+  by elapsed time. \code{state_occ} is the selected starting-state slice.
 }
 \description{
-Predicts patient-specific transition probability matrices and state
-occupation probabilities using fitted random forest multistate models.
+Predicts clock-reset semi-Markov state-occupation probabilities conditional
+on fresh entry into a selected state at elapsed duration zero.
+}
+\details{
+These are not general Markov \eqn{P(s,t)} matrices. Predictions do
+  not condition on an already elapsed sojourn and carry no confidence bands.
+  By default the horizon cannot exceed the minimum observed sojourn support
+  among reachable transient states.
 }
 \examples{
 \donttest{
 ms <- clinical_states()
-set.seed(42)
-dat <- sim_clinical_data(n = 200, structure = ms)
-msdata <- prepare_data(
-  data = dat, id = "ID", structure = ms,
-  time_map = list(
-    Responded = "time_Responded",
-    Unresponded = "time_Unresponded",
-    Stabilized = "time_Stabilized",
-    Progressed = "time_Progressed",
-    Death = "time_Death"
-  ),
-  censor_col = "time_censored",
-  covariates = c("age", "sex", "BMI", "treatment")
+dat <- sim_clinical_data(300, structure = ms, seed = 42)
+long <- prepare_data(
+  dat, "ID", ms,
+  list(Responded="time_Responded", Unresponded="time_Unresponded",
+       Stabilized="time_Stabilized", Progressed="time_Progressed",
+       Death="time_Death"),
+  "time_censored", c("age", "sex", "BMI", "treatment")
 )
-fit <- rfmstate(msdata, covariates = c("age", "sex", "BMI", "treatment"),
-                num.trees = 100)
-newpat <- data.frame(age = c(50, 70), sex = c(0, 1),
-                     BMI = c(25, 30), treatment = c(1, 0))
-pred <- predict(fit, newdata = newpat, times = c(30, 90, 180, 365))
+fit <- rfmstate(long, num.trees = 100, min_events = 3, seed = 42)
+horizon <- min(fit$max_duration_by_origin)
+predict(fit, data.frame(age=60, sex=1, BMI=26, treatment=1),
+        times = c(0, horizon / 2))
 }
 
 }

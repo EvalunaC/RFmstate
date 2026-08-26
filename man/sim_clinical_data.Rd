@@ -35,8 +35,8 @@ A data frame in wide format with columns:
 }
 \description{
 Generates realistic clinical trial data with covariates and multistate
-event times for testing and demonstration. Works with any multistate
-structure.
+event times for testing and demonstration. The structure must be an acyclic,
+non-recurrent graph with one common initial state.
 }
 \details{
 Transition intensities follow Weibull distributions with covariate effects

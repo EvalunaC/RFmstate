@@ -2,7 +2,7 @@
 % Please edit documentation in R/aalen_johansen.R
 \name{aalen_johansen}
 \alias{aalen_johansen}
-\title{Aalen-Johansen Nonparametric Estimator}
+\title{Aalen-Johansen Point Estimator}
 \usage{
 aalen_johansen(msdata, s = 0)
 }
@@ -16,14 +16,12 @@ aalen_johansen(msdata, s = 0)
 An object of class \code{"aj_estimate"} containing:
   \describe{
     \item{time}{Numeric vector of unique event times.}
-    \item{trans_prob}{List of transition probability matrices P(s,t) at each
-      event time.}
+    \item{trans_prob}{List of calendar-time product-integral point-estimate
+      matrices from the recorded common baseline at each event time.}
     \item{state_occ}{Matrix of state occupation probabilities over time.
       Rows are time points, columns are states.}
     \item{cum_hazard}{List of Nelson-Aalen cumulative hazard matrices.}
     \item{hazard_inc}{List of hazard increment matrices at each event time.}
-    \item{variance}{List of Greenwood-type variance estimates for state
-      occupation probabilities.}
     \item{n_risk}{Matrix of at-risk counts over time.}
     \item{n_events}{Data frame of event counts per transition.}
     \item{structure}{The multistate structure used.}
@@ -37,9 +35,8 @@ product-integral construction.
 }
 \details{
 The Aalen-Johansen estimator generalizes the Kaplan-Meier estimator to
-multistate models under the Markov assumption and independent right
-censoring. It provides population-level transition probability matrices
-without covariate adjustment.
+multistate models. RFmstate exposes it as a descriptive, covariate-free
+calendar-time population benchmark from the recorded common baseline.
 }
 \examples{
 ms <- clinical_states()

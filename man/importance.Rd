@@ -25,7 +25,14 @@ An object of class \code{"rfmstate_importance"} containing:
 }
 \description{
 Extracts and organizes variable importance scores from the fitted random
-forest models for each transition.
+forest models for each transition. These are ranger permutation-importance
+scores based on edge-specific OOB predictive loss, not causal effects.
+}
+\details{
+Values are transition-specific and may have different effective
+  sample sizes. Negative values can arise from Monte Carlo variation, sparse
+  events, correlated predictors, or noise; they do not indicate protective
+  or causal effects. Repeated seeds/resamples are needed to assess stability.
 }
 \examples{
 \donttest{
