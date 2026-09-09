@@ -1,26 +1,28 @@
 #' @title RFmstate: Random Forest-Based Multistate Survival Analysis
 #'
-#' @description Fits cause-specific random survival forests for flexible
-#'   multistate survival analysis with covariate-adjusted transition
-#'   probabilities computed via product-integral. For each transient state,
-#'   competing transitions are modeled by separate random forests, and
-#'   patient-specific transition probability matrices are assembled from
-#'   the predicted cumulative hazards using the product-integral formula.
-#'   Also provides a standalone Aalen-Johansen nonparametric estimator as
-#'   a covariate-free baseline. Supports arbitrary state spaces with any
-#'   number of states (three or more) and any set of allowed transitions,
-#'   applicable to clinical trials, disease progression, reliability
-#'   engineering, and other domains where subjects move among discrete
-#'   states over time. The package provides:
+#' @description Fits transition-specific cause-specific random survival forests
+#'   on a clock-reset duration scale for acyclic, non-recurrent multistate
+#'   processes. Patient/profile state probabilities are assembled by
+#'   semi-Markov convolution and are conditional on fresh state entry. The
+#'   package supports a common initial state, one recorded entry per state,
+#'   baseline time-fixed covariates, competing exits, and independent right
+#'   censoring. It does not support left truncation, cycles/recurrent visits,
+#'   time-dependent covariates, or ongoing-sojourn dynamic prediction. A
+#'   strict predictor contract prevents IDs, event/censoring times, response
+#'   fields, and arbitrary long-format columns from entering a forest. Every
+#'   full-data or cross-validation fit learns its predictor schema only from
+#'   its own fitting rows, and every reported OOB statistic has verified OOB
+#'   coverage. A calendar-time Aalen-Johansen point estimator is provided as a
+#'   covariate-free descriptive baseline. The package provides:
 #'   \itemize{
 #'     \item State space and transition structure definition
 #'     \item Wide-to-long data conversion for multistate counting processes
 #'     \item Cause-specific random forest fitting per origin state
-#'     \item Transition probability matrices via product-integral of predicted
-#'       cumulative hazards
-#'     \item Aalen-Johansen nonparametric estimation (covariate-free baseline)
+#'     \item Entry-conditioned state probabilities via semi-Markov convolution
+#'     \item Aalen-Johansen point estimation (covariate-free baseline)
 #'     \item Per-transition feature importance
-#'     \item Bias-variance diagnostics with Brier score and C-index
+#'     \item Genuine edge OOB concordance and patient-level cross-validated
+#'       IPCW Brier scores
 #'     \item Comprehensive visualizations
 #'   }
 #'

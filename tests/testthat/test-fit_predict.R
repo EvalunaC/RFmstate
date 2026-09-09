@@ -15,8 +15,10 @@ test_that("rfmstate fits models", {
     covariates = c("age", "sex", "BMI", "treatment")
   )
 
-  fit <- rfmstate(msdata, covariates = c("age", "sex", "BMI", "treatment"),
-                  num.trees = 50, seed = 42)
+  fit <- suppressWarnings(rfmstate(
+    msdata, covariates = c("age", "sex", "BMI", "treatment"),
+    num.trees = 50, min_events = 3, seed = 42
+  ))
 
   expect_s3_class(fit, "rfmstate")
   expect_true(length(fit$models) > 0)
@@ -40,11 +42,16 @@ test_that("predict.rfmstate returns valid predictions", {
     covariates = c("age", "sex", "BMI", "treatment")
   )
 
-  fit <- rfmstate(msdata, covariates = c("age", "sex", "BMI", "treatment"),
-                  num.trees = 50, seed = 42)
+  fit <- suppressWarnings(rfmstate(
+    msdata, covariates = c("age", "sex", "BMI", "treatment"),
+    num.trees = 50, min_events = 3, seed = 42
+  ))
 
   newdata <- data.frame(age = 60, sex = 1, BMI = 25, treatment = 1)
-  pred <- predict(fit, newdata = newdata, times = c(30, 90, 180))
+  horizon <- min(fit$max_duration_by_origin)
+  prediction_times <- c(0, horizon / 3, 2 * horizon / 3)
+  pred <- predict(fit, newdata = newdata, times = prediction_times,
+                  target_grid_points = 1024)
 
   expect_s3_class(pred, "rfmstate_pred")
   expect_equal(pred$n_subjects, 1)
@@ -53,8 +60,8 @@ test_that("predict.rfmstate returns valid predictions", {
   # State occupation probabilities should be valid
   for (k in seq_along(pred$time)) {
     occ <- pred$state_occ[1, , k]
-    expect_true(all(occ >= -0.01))
-    expect_true(abs(sum(occ) - 1) < 0.1)
+    expect_true(all(occ >= -1e-8))
+    expect_true(abs(sum(occ) - 1) < 1e-8)
   }
 })
 
@@ -75,8 +82,10 @@ test_that("summary.rfmstate works", {
     covariates = c("age", "sex", "BMI", "treatment")
   )
 
-  fit <- rfmstate(msdata, covariates = c("age", "sex", "BMI", "treatment"),
-                  num.trees = 50, seed = 42)
+  fit <- suppressWarnings(rfmstate(
+    msdata, covariates = c("age", "sex", "BMI", "treatment"),
+    num.trees = 50, min_events = 3, seed = 42
+  ))
 
   s <- summary(fit)
   expect_s3_class(s, "summary.rfmstate")
@@ -101,8 +110,10 @@ test_that("importance.rfmstate works", {
     covariates = c("age", "sex", "BMI", "treatment")
   )
 
-  fit <- rfmstate(msdata, covariates = c("age", "sex", "BMI", "treatment"),
-                  num.trees = 50, seed = 42)
+  fit <- suppressWarnings(rfmstate(
+    msdata, covariates = c("age", "sex", "BMI", "treatment"),
+    num.trees = 50, min_events = 3, seed = 42
+  ))
 
   imp <- importance(fit)
   expect_s3_class(imp, "rfmstate_importance")
@@ -127,11 +138,16 @@ test_that("diagnose.rfmstate works", {
     covariates = c("age", "sex", "BMI", "treatment")
   )
 
-  fit <- rfmstate(msdata, covariates = c("age", "sex", "BMI", "treatment"),
-                  num.trees = 50, seed = 42)
+  fit <- suppressWarnings(rfmstate(
+    msdata, covariates = c("age", "sex", "BMI", "treatment"),
+    num.trees = 50, min_events = 3, seed = 42
+  ))
 
   diag <- diagnose(fit)
   expect_s3_class(diag, "rfmstate_diag")
   expect_true(nrow(diag$oob_error) > 0)
   expect_true(nrow(diag$concordance) > 0)
+  expect_false("bias_variance" %in% names(diag))
+  expect_equal(diag$edge_oob$oob_concordance,
+               1 - diag$edge_oob$prediction_error)
 })

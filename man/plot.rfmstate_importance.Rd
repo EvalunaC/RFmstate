@@ -4,7 +4,15 @@
 \alias{plot.rfmstate_importance}
 \title{Plot Feature Importance}
 \usage{
-\method{plot}{rfmstate_importance}(x, type = c("barplot", "heatmap"), col = NULL, main = NULL, ...)
+\method{plot}{rfmstate_importance}(
+  x,
+  type = c("barplot", "heatmap"),
+  col = NULL,
+  main = NULL,
+  xlab = NULL,
+  ylab = NULL,
+  ...
+)
 }
 \arguments{
 \item{x}{An \code{rfmstate_importance} object.}
@@ -12,11 +20,15 @@
 \item{type}{Character, one of \code{"barplot"} (default),
 \code{"heatmap"}.}
 
-\item{col}{Colors.}
+\item{col}{Bar colors or heatmap gradient-anchor colors. \code{NULL} uses
+the package defaults.}
 
 \item{main}{Title.}
 
-\item{...}{Additional arguments.}
+\item{xlab, ylab}{Axis labels.}
+
+\item{...}{Additional graphical arguments. For a heatmap they are passed to
+\code{image}; for a barplot they are passed to \code{barplot}.}
 }
 \value{
 The input \code{x} object, returned invisibly. Called for its
@@ -25,4 +37,22 @@ The input \code{x} object, returned invisibly. Called for its
 \description{
 Visualizes per-transition feature importance as a grouped barplot or
 heatmap.
+}
+\section{Limitations}{
+
+Values are transition-specific ranger importance scores. Negative values may
+arise from Monte Carlo noise, sparse events, correlated predictors, or
+irrelevant variables and are not protective or causal effects. Scales may
+differ across transitions.
+}
+
+\examples{
+imp <- structure(list(
+  importance_matrix = matrix(
+    c(0.2, -0.1), nrow = 2,
+    dimnames = list(c("x", "z"), "A->B")
+  )
+), class = "rfmstate_importance")
+plot(imp, xlab = "OOB loss increase", ylab = "Predictor")
+
 }

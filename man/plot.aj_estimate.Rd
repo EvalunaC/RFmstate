@@ -7,11 +7,13 @@
 \method{plot}{aj_estimate}(
   x,
   type = c("state_occupation", "stacked_transition_prob", "cumulative_hazard",
-    "transition_intensity"),
+    "hazard_increment", "transition_intensity"),
   states = NULL,
-  ci = TRUE,
+  ci = FALSE,
   col = NULL,
   main = NULL,
+  xlab = "Time",
+  ylab = NULL,
   ...
 )
 }
@@ -20,18 +22,23 @@
 
 \item{type}{Character, one of \code{"state_occupation"} (default),
 \code{"stacked_transition_prob"}, \code{"cumulative_hazard"},
-\code{"transition_intensity"}.}
+\code{"hazard_increment"}. The legacy \code{"transition_intensity"}
+alias warns because increments are not intensities.}
 
 \item{states}{Character vector of states to plot (default: all).
-For \code{"transition_intensity"}, filters by destination state.}
+For cumulative-hazard and hazard-increment plots, transitions are filtered
+by destination state.}
 
-\item{ci}{Logical, whether to show confidence intervals (default
-\code{TRUE}).}
+\item{ci}{One nonmissing logical value. This is a deprecated compatibility
+argument: \code{TRUE} warns because no validated AJ covariance or
+confidence band is returned.}
 
-\item{col}{Colors for each state/transition. If \code{NULL}, default
-palette is used.}
+\item{col}{One or more colors for selected states/transitions. Values are
+recycled when necessary; \code{NULL} uses the package palette.}
 
 \item{main}{Title (default: auto-generated).}
+
+\item{xlab, ylab}{Axis labels.}
 
 \item{...}{Additional arguments passed to \code{\link{plot}}.}
 }
@@ -40,6 +47,28 @@ The input \code{x} object, returned invisibly. Called for its
   side effect of producing a plot.
 }
 \description{
-Visualizes state occupation probabilities and transition probabilities
-from the Aalen-Johansen estimator.
+Visualizes calendar-time state occupation, product-integral point estimates,
+Nelson--Aalen cumulative cause-specific hazards, or hazard increments from
+the Aalen--Johansen estimator.
+}
+\section{Limitations}{
+
+AJ plots are covariate-free calendar-time point estimates from the common
+baseline. Confidence bands are unavailable. Hazard increments are discrete
+Nelson--Aalen increments, not smoothed transition intensities. The legacy
+\code{"transition_intensity"} type is deprecated and draws the same
+hazard-increment plot with a warning. The historical
+\code{"stacked_transition_prob"} label displays the selected state-occupation
+components from the recorded initial state.
+}
+
+\examples{
+ms <- define_multistate(c("A", "B"), "B", list(A = "B"))
+dat <- data.frame(id = 1:6, x = 1:6, time_B = 1:6,
+                  censor = NA_real_)
+long <- prepare_data(dat, "id", ms, list(B = "time_B"), "censor", "x")
+aj <- aalen_johansen(long)
+plot(aj, states = "B", xlab = "Study day", ylab = "Probability")
+plot(aj, type = "hazard_increment", states = "B")
+
 }

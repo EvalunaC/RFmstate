@@ -10,6 +10,9 @@
   subject = 1L,
   col = NULL,
   main = NULL,
+  states = NULL,
+  xlab = "Elapsed duration",
+  ylab = NULL,
   ...
 )
 }
@@ -22,9 +25,14 @@
 \item{subject}{Integer, which subject to plot (default 1). Use 0 for
 mean across all subjects.}
 
-\item{col}{Colors. If \code{NULL}, default palette is used.}
+\item{col}{One or more state colors. Values are recycled when necessary;
+\code{NULL} uses the package palette.}
 
 \item{main}{Title.}
+
+\item{states}{Occupied states to display.}
+
+\item{xlab, ylab}{Axis labels.}
 
 \item{...}{Additional arguments passed to \code{\link{plot}}.}
 }
@@ -35,4 +43,29 @@ The input \code{x} object, returned invisibly. Called for its
 \description{
 Visualizes predicted state occupation probabilities and transition
 probabilities for individual patients.
+}
+\section{Limitations}{
+
+Curves are entry-conditioned on fresh entry into the fitted
+\code{start_state}; they are not general Markov \eqn{P(s,t)} curves and have
+no confidence bands. \code{subject = 0} is an arithmetic mean of profile
+predictions, not a population-standardized estimator. The historical
+\code{"transition_prob"} plot type displays the occupied-state components
+conditional on the selected fresh-entry state.
+}
+
+\examples{
+\donttest{
+ms <- define_multistate(c("A", "B"), "B", list(A = "B"))
+dat <- data.frame(id = 1:60, x = seq(-1, 1, length.out = 60),
+                  time_B = 1:60, censor = NA_real_)
+long <- prepare_data(dat, "id", ms, list(B = "time_B"), "censor", "x")
+fit <- rfmstate(long, num.trees = 20, min.node.size = 3,
+                min_events = 3, sparse_warning = Inf, seed = 42)
+pred <- predict(fit, data.frame(x = 0), times = c(0, 5, 10),
+                target_grid_points = 64, max_grid_points = 1025)
+plot(pred, states = c("A", "B"), xlab = "Elapsed day")
+plot(pred, type = "transition_prob", states = "B")
+}
+
 }

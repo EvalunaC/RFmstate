@@ -1,56 +1,96 @@
 #' Plot Aalen-Johansen Estimates
 #'
-#' Visualizes state occupation probabilities and transition probabilities
-#' from the Aalen-Johansen estimator.
+#' Visualizes calendar-time state occupation, product-integral point estimates,
+#' Nelson--Aalen cumulative cause-specific hazards, or hazard increments from
+#' the Aalen--Johansen estimator.
 #'
 #' @param x An \code{aj_estimate} object.
 #' @param type Character, one of \code{"state_occupation"} (default),
 #'   \code{"stacked_transition_prob"}, \code{"cumulative_hazard"},
-#'   \code{"transition_intensity"}.
+#'   \code{"hazard_increment"}. The legacy \code{"transition_intensity"}
+#'   alias warns because increments are not intensities.
 #' @param states Character vector of states to plot (default: all).
-#'   For \code{"transition_intensity"}, filters by destination state.
-#' @param ci Logical, whether to show confidence intervals (default
-#'   \code{TRUE}).
-#' @param col Colors for each state/transition. If \code{NULL}, default
-#'   palette is used.
+#'   For cumulative-hazard and hazard-increment plots, transitions are filtered
+#'   by destination state.
+#' @param ci One nonmissing logical value. This is a deprecated compatibility
+#'   argument: \code{TRUE} warns because no validated AJ covariance or
+#'   confidence band is returned.
+#' @param col One or more colors for selected states/transitions. Values are
+#'   recycled when necessary; \code{NULL} uses the package palette.
 #' @param main Title (default: auto-generated).
+#' @param xlab,ylab Axis labels.
 #' @param ... Additional arguments passed to \code{\link{plot}}.
 #'
 #' @return The input \code{x} object, returned invisibly. Called for its
 #'   side effect of producing a plot.
 #'
+#' @section Limitations:
+#' AJ plots are covariate-free calendar-time point estimates from the common
+#' baseline. Confidence bands are unavailable. Hazard increments are discrete
+#' Nelson--Aalen increments, not smoothed transition intensities. The legacy
+#' \code{"transition_intensity"} type is deprecated and draws the same
+#' hazard-increment plot with a warning. The historical
+#' \code{"stacked_transition_prob"} label displays the selected state-occupation
+#' components from the recorded initial state.
+#'
+#' @examples
+#' ms <- define_multistate(c("A", "B"), "B", list(A = "B"))
+#' dat <- data.frame(id = 1:6, x = 1:6, time_B = 1:6,
+#'                   censor = NA_real_)
+#' long <- prepare_data(dat, "id", ms, list(B = "time_B"), "censor", "x")
+#' aj <- aalen_johansen(long)
+#' plot(aj, states = "B", xlab = "Study day", ylab = "Probability")
+#' plot(aj, type = "hazard_increment", states = "B")
+#'
 #' @export
 plot.aj_estimate <- function(x, type = c("state_occupation",
                                           "stacked_transition_prob",
                                           "cumulative_hazard",
+                                          "hazard_increment",
                                           "transition_intensity"),
-                             states = NULL, ci = TRUE, col = NULL,
-                             main = NULL, ...) {
+                             states = NULL, ci = FALSE, col = NULL,
+                             main = NULL, xlab = "Time", ylab = NULL, ...) {
   type <- match.arg(type)
 
-  if (is.null(states)) states <- x$structure$state_names
+  states <- .validate_plot_states(states, x$structure$state_names)
+  .validate_scalar_logical(ci, "ci")
+  if (ci) {
+    warning("AJ confidence intervals are unavailable: no validated covariance ",
+            "is returned.", call. = FALSE)
+  }
   ns <- length(states)
   if (is.null(col)) col <- .default_palette(ns)
-  if (length(col) < ns) col <- rep_len(col, ns)
+  if (!length(col)) stop("'col' must contain at least one color.")
+  col <- rep_len(col, ns)
 
   switch(type,
     "state_occupation" = {
       if (is.null(main)) main <- "State Occupation Probabilities (AJ)"
       .plot_state_occ(x$time, x$state_occ, states,
-                      x$structure$state_names, col, main, ci,
-                      x$variance, ...)
+                      x$structure$state_names, col, main, xlab,
+                      ylab %||% "State-occupation probability", ...)
     },
     "stacked_transition_prob" = {
       if (is.null(main)) main <- "Stacked Transition Probabilities (AJ)"
-      .plot_trans_prob_aj(x, states, col, main, ...)
+      .plot_trans_prob_aj(x, states, col, main, xlab,
+                          ylab %||% "State-occupation probability", ...)
     },
     "cumulative_hazard" = {
       if (is.null(main)) main <- "Cumulative Hazards (Nelson-Aalen)"
-      .plot_cum_hazard_aj(x, col, main, ...)
+      .plot_cum_hazard_aj(x, states, col, main, xlab,
+                          ylab %||% "Cumulative cause-specific hazard", ...)
+    },
+    "hazard_increment" = {
+      if (is.null(main)) main <- "Nelson-Aalen Hazard Increments"
+      .plot_hazard_increment_aj(x, states, col, main, xlab,
+                                ylab %||% "Nelson-Aalen hazard increment", ...)
     },
     "transition_intensity" = {
-      if (is.null(main)) main <- "Transition Intensities"
-      .plot_trans_intensity_aj(x, states, col, main, ...)
+      warning("type = 'transition_intensity' is deprecated; use ",
+              "type = 'hazard_increment'.", call. = FALSE)
+      if (is.null(main)) main <- "Nelson-Aalen Hazard Increments"
+      .plot_hazard_increment_aj(x, states, col, main, xlab,
+                                ylab %||% "Nelson-Aalen hazard increment", ...)
     }
   )
   invisible(x)
@@ -66,23 +106,53 @@ plot.aj_estimate <- function(x, type = c("state_occupation",
 #'   \code{"transition_prob"}.
 #' @param subject Integer, which subject to plot (default 1). Use 0 for
 #'   mean across all subjects.
-#' @param col Colors. If \code{NULL}, default palette is used.
+#' @param col One or more state colors. Values are recycled when necessary;
+#'   \code{NULL} uses the package palette.
 #' @param main Title.
+#' @param states Occupied states to display.
+#' @param xlab,ylab Axis labels.
 #' @param ... Additional arguments passed to \code{\link{plot}}.
 #'
 #' @return The input \code{x} object, returned invisibly. Called for its
 #'   side effect of producing a plot.
 #'
+#' @section Limitations:
+#' Curves are entry-conditioned on fresh entry into the fitted
+#' \code{start_state}; they are not general Markov \eqn{P(s,t)} curves and have
+#' no confidence bands. \code{subject = 0} is an arithmetic mean of profile
+#' predictions, not a population-standardized estimator. The historical
+#' \code{"transition_prob"} plot type displays the occupied-state components
+#' conditional on the selected fresh-entry state.
+#'
+#' @examples
+#' \donttest{
+#' ms <- define_multistate(c("A", "B"), "B", list(A = "B"))
+#' dat <- data.frame(id = 1:60, x = seq(-1, 1, length.out = 60),
+#'                   time_B = 1:60, censor = NA_real_)
+#' long <- prepare_data(dat, "id", ms, list(B = "time_B"), "censor", "x")
+#' fit <- rfmstate(long, num.trees = 20, min.node.size = 3,
+#'                 min_events = 3, sparse_warning = Inf, seed = 42)
+#' pred <- predict(fit, data.frame(x = 0), times = c(0, 5, 10),
+#'                 target_grid_points = 64, max_grid_points = 1025)
+#' plot(pred, states = c("A", "B"), xlab = "Elapsed day")
+#' plot(pred, type = "transition_prob", states = "B")
+#' }
+#'
 #' @export
 plot.rfmstate_pred <- function(x, type = c("state_occupation",
                                             "transition_prob"),
                                subject = 1L, col = NULL,
-                               main = NULL, ...) {
+                               main = NULL, states = NULL,
+                               xlab = "Elapsed duration", ylab = NULL, ...) {
   type <- match.arg(type)
   state_names <- x$structure$state_names
+  states <- .validate_plot_states(states, state_names)
   ns <- length(state_names)
+  subject <- .validate_plot_subject(subject, x$n_subjects)
 
   if (is.null(col)) col <- .default_palette(ns)
+  if (!length(col)) stop("'col' must contain at least one color.")
+  col <- rep_len(col, ns)
 
   if (subject == 0) {
     # Mean across subjects
@@ -102,7 +172,8 @@ plot.rfmstate_pred <- function(x, type = c("state_occupation",
       if (is.null(main)) {
         main <- paste("Predicted State Occupation -", subj_label)
       }
-      .plot_state_occ_pred(x$time, occ, state_names, col, main, ...)
+      .plot_state_occ_pred(x$time, occ, state_names, states, col, main,
+                           xlab, ylab %||% "State-occupation probability", ...)
     },
     "transition_prob" = {
       if (is.null(main)) {
@@ -111,9 +182,19 @@ plot.rfmstate_pred <- function(x, type = c("state_occupation",
       if (subject == 0) {
         P_mean <- apply(x$P, c(2, 3, 4), mean)
       } else {
-        P_mean <- x$P[subject, , , ]
+        P_mean <- x$P[subject, , , , drop = FALSE]
       }
-      .plot_trans_prob_pred(x$time, P_mean, state_names, col, main, ...)
+      # Preserve the selected-start dimension even when it has length one.
+      # Both a single profile and a profile mean are represented here as
+      # start state x occupied state x time.
+      P_mean <- array(
+        as.numeric(P_mean),
+        dim = dim(x$P)[-1L],
+        dimnames = dimnames(x$P)[-1L]
+      )
+      .plot_trans_prob_pred(x$time, P_mean, state_names, states,
+                            x$start_state, col, main, xlab,
+                            ylab %||% "Entry-conditioned state probability", ...)
     }
   )
   invisible(x)
@@ -127,27 +208,51 @@ plot.rfmstate_pred <- function(x, type = c("state_occupation",
 #' @param x An \code{rfmstate_importance} object.
 #' @param type Character, one of \code{"barplot"} (default),
 #'   \code{"heatmap"}.
-#' @param col Colors.
+#' @param col Bar colors or heatmap gradient-anchor colors. \code{NULL} uses
+#'   the package defaults.
 #' @param main Title.
-#' @param ... Additional arguments.
+#' @param xlab,ylab Axis labels.
+#' @param ... Additional graphical arguments. For a heatmap they are passed to
+#'   \code{image}; for a barplot they are passed to \code{barplot}.
 #'
 #' @return The input \code{x} object, returned invisibly. Called for its
 #'   side effect of producing a plot.
 #'
+#' @section Limitations:
+#' Values are transition-specific ranger importance scores. Negative values may
+#' arise from Monte Carlo noise, sparse events, correlated predictors, or
+#' irrelevant variables and are not protective or causal effects. Scales may
+#' differ across transitions.
+#'
+#' @examples
+#' imp <- structure(list(
+#'   importance_matrix = matrix(
+#'     c(0.2, -0.1), nrow = 2,
+#'     dimnames = list(c("x", "z"), "A->B")
+#'   )
+#' ), class = "rfmstate_importance")
+#' plot(imp, xlab = "OOB loss increase", ylab = "Predictor")
+#'
 #' @export
 plot.rfmstate_importance <- function(x,
                                      type = c("barplot", "heatmap"),
-                                     col = NULL, main = NULL, ...) {
+                                     col = NULL, main = NULL,
+                                     xlab = NULL, ylab = NULL, ...) {
   type <- match.arg(type)
 
   switch(type,
     "barplot" = {
       if (is.null(main)) main <- "Feature Importance by Transition"
-      .plot_importance_bar(x, col, main, ...)
+      .plot_importance_bar(
+        x, col, main, xlab %||% "Permutation importance",
+        ylab %||% "Variable", ...
+      )
     },
     "heatmap" = {
       if (is.null(main)) main <- "Feature Importance Heatmap"
-      .plot_importance_heat(x, col, main, ...)
+      .plot_importance_heat(
+        x, col, main, xlab %||% "Transition", ylab %||% "Variable", ...
+      )
     }
   )
   invisible(x)
@@ -155,37 +260,50 @@ plot.rfmstate_importance <- function(x,
 
 #' Plot Diagnostics
 #'
-#' Visualizes diagnostic measures including Brier score curves,
-#' concordance indices, and bias-variance decomposition.
+#' Visualizes genuine edge OOB concordance or patient-level cross-validated
+#' full-state Brier scores.
 #'
 #' @param x An \code{rfmstate_diag} object.
 #' @param type Character, one of \code{"brier"} (default),
-#'   \code{"concordance"}, \code{"bias_variance"}.
-#' @param col Colors.
+#'   \code{"concordance"}.
+#' @param col One or more plot colors; recycled when necessary.
 #' @param main Title.
+#' @param xlab,ylab Axis labels.
 #' @param ... Additional arguments.
 #'
 #' @return The input \code{x} object, returned invisibly. Called for its
 #'   side effect of producing a plot.
 #'
+#' @section Limitations:
+#' Concordance plots contain separate edge-level ranger OOB statistics, not
+#' assembled full-state validation. Brier plots require an object produced by
+#' \code{diagnose(..., method = "cv")} and inherit its censoring/support
+#' limitations. No bias--variance plot is available.
+#'
+#' @examples
+#' d <- structure(list(
+#'   concordance = data.frame(transition = "A->B", c_index = 0.7),
+#'   brier = NULL
+#' ), class = "rfmstate_diag")
+#' plot(d, type = "concordance", xlab = "Edge", ylab = "OOB C-index")
+#'
 #' @export
-plot.rfmstate_diag <- function(x, type = c("brier", "concordance",
-                                            "bias_variance"),
-                               col = NULL, main = NULL, ...) {
+plot.rfmstate_diag <- function(x, type = c("brier", "concordance"),
+                               col = NULL, main = NULL,
+                               xlab = NULL, ylab = NULL, ...) {
   type <- match.arg(type)
 
   switch(type,
     "brier" = {
       if (is.null(main)) main <- "Time-Dependent Brier Score"
-      .plot_brier(x, col, main, ...)
+      .plot_brier(x, col, main, xlab %||% "Time",
+                  ylab %||% "Cross-validated Brier score", ...)
     },
     "concordance" = {
       if (is.null(main)) main <- "Concordance Index by Transition"
-      .plot_concordance(x, col, main, ...)
-    },
-    "bias_variance" = {
-      if (is.null(main)) main <- "Bias-Variance Decomposition"
-      .plot_bias_variance(x, col, main, ...)
+      .plot_concordance(
+        x, col, main, xlab %||% "Transition", ylab %||% "OOB C-index", ...
+      )
     }
   )
   invisible(x)
@@ -205,28 +323,55 @@ plot.rfmstate_diag <- function(x, type = c("brier", "concordance",
   }
 }
 
+#' Validate a public plot state filter
+#' @noRd
+.validate_plot_states <- function(states, state_names) {
+  if (is.null(states)) return(state_names)
+  if (!is.character(states) || !length(states) || anyNA(states) ||
+      any(!nzchar(states)) || anyDuplicated(states)) {
+    stop("'states' must be a nonempty character vector of unique state names.")
+  }
+  invalid <- setdiff(states, state_names)
+  if (length(invalid)) {
+    stop("Unknown state(s): ", paste(invalid, collapse = ", "), ".")
+  }
+  states
+}
+
+#' Validate the public prediction-plot subject selector
+#' @noRd
+.validate_plot_subject <- function(subject, n_subjects) {
+  if (!is.numeric(subject) || length(subject) != 1L || !is.finite(subject) ||
+      subject < 0 || subject != as.integer(subject)) {
+    stop("'subject' must be zero or one positive integer profile index.")
+  }
+  subject <- as.integer(subject)
+  if (subject > n_subjects) {
+    stop("Subject ", subject, " exceeds number of subjects (", n_subjects, ").")
+  }
+  subject
+}
+
+#' Filter transitions by selected destination states
+#' @noRd
+.filter_plot_transitions <- function(trans_list, states) {
+  trans_list[trans_list$to %in% states, , drop = FALSE]
+}
+
 #' Plot state occupation from AJ
 #' @noRd
 .plot_state_occ <- function(times, state_occ, states, all_states,
-                            col, main, ci, variance, ...) {
+                            col, main, xlab, ylab, ...) {
   state_idx <- match(states, all_states)
 
   plot(NULL, xlim = range(times), ylim = c(0, 1),
-       xlab = "Time", ylab = "Probability",
+       xlab = xlab, ylab = ylab,
        main = main, ...)
 
   for (i in seq_along(state_idx)) {
     idx <- state_idx[i]
     lines(times, state_occ[, idx], col = col[i], lwd = 2)
 
-    if (ci && !is.null(variance)) {
-      var_vals <- vapply(variance, function(v) v[idx], numeric(1))
-      se <- sqrt(pmax(var_vals, 0))
-      upper <- pmin(state_occ[, idx] + 1.96 * se, 1)
-      lower <- pmax(state_occ[, idx] - 1.96 * se, 0)
-      polygon(c(times, rev(times)), c(upper, rev(lower)),
-              col = adjustcolor(col[i], alpha.f = 0.15), border = NA)
-    }
   }
 
   legend("topright", legend = states, col = col[seq_along(states)],
@@ -235,16 +380,17 @@ plot.rfmstate_diag <- function(x, type = c("brier", "concordance",
 
 #' Plot transition probabilities from AJ
 #' @noRd
-.plot_trans_prob_aj <- function(aj, states, col, main, ...) {
+.plot_trans_prob_aj <- function(aj, states, col, main, xlab, ylab, ...) {
   state_names <- aj$structure$state_names
   n_times <- length(aj$time)
   ns <- length(states)
 
-  # Extract P(1, j, t) for each destination state
+  # Extract the recorded initial-state row for each destination state.
+  initial_idx <- match(aj$initial_state, state_names)
   prob_mat <- matrix(0, nrow = n_times, ncol = ns)
   for (j in seq_len(ns)) {
     j_idx <- match(states[j], state_names)
-    prob_mat[, j] <- vapply(aj$trans_prob, function(P) P[1, j_idx],
+    prob_mat[, j] <- vapply(aj$trans_prob, function(P) P[initial_idx, j_idx],
                             numeric(1))
   }
 
@@ -260,7 +406,7 @@ plot.rfmstate_diag <- function(x, type = c("brier", "concordance",
   }
 
   plot(NULL, xlim = range(aj$time), ylim = c(0, 1),
-       xlab = "Time", ylab = "P(s, t)",
+       xlab = xlab, ylab = ylab,
        main = main, ...)
 
   # Draw stacked polygons from top to bottom so borders layer correctly
@@ -278,10 +424,11 @@ plot.rfmstate_diag <- function(x, type = c("brier", "concordance",
 
 #' Plot cumulative hazards from AJ
 #' @noRd
-.plot_cum_hazard_aj <- function(aj, col, main, ...) {
-  trans_list <- aj$structure$trans_list
+.plot_cum_hazard_aj <- function(aj, states, col, main, xlab, ylab, ...) {
+  trans_list <- .filter_plot_transitions(aj$structure$trans_list, states)
   n_trans <- nrow(trans_list)
-  tcol <- .default_palette(n_trans)
+  if (!n_trans) stop("No transitions lead to the selected state(s).")
+  tcol <- rep_len(col, n_trans)
 
   # First pass: compute max cumulative hazard for y-axis
   max_ch <- 0
@@ -299,7 +446,7 @@ plot.rfmstate_diag <- function(x, type = c("brier", "concordance",
   if (max_ch <= 0) max_ch <- 1
 
   plot(NULL, xlim = range(aj$time), ylim = c(0, max_ch * 1.1),
-       xlab = "Time", ylab = "Cumulative Hazard",
+       xlab = xlab, ylab = ylab,
        main = main, ...)
 
   for (tr in seq_len(n_trans)) {
@@ -311,20 +458,18 @@ plot.rfmstate_diag <- function(x, type = c("brier", "concordance",
          lwd = 2, bty = "n", cex = 0.7)
 }
 
-#' Plot transition intensities from AJ
+#' Plot Nelson-Aalen hazard increments from AJ
 #' @noRd
-.plot_trans_intensity_aj <- function(aj, states, col, main, ...) {
+.plot_hazard_increment_aj <- function(aj, states, col, main, xlab, ylab, ...) {
   state_names <- aj$structure$state_names
   trans_list <- aj$structure$trans_list
 
   # Keep transitions whose destination is in selected states
-  keep <- trans_list$to %in% states
-  trans_sub <- trans_list[keep, , drop = FALSE]
+  trans_sub <- .filter_plot_transitions(trans_list, states)
   n_sub <- nrow(trans_sub)
 
   if (n_sub == 0) {
-    message("No transitions to the selected states.")
-    return(invisible(NULL))
+    stop("No transitions lead to the selected state(s).")
   }
 
   # Extract hazard increments for each transition
@@ -341,7 +486,7 @@ plot.rfmstate_diag <- function(x, type = c("brier", "concordance",
   if (max_int <= 0) max_int <- 0.1
 
   plot(NULL, xlim = range(aj$time), ylim = c(0, max_int * 1.1),
-       xlab = "Time", ylab = "Transition Intensity",
+       xlab = xlab, ylab = ylab,
        main = main, ...)
 
   # Point shape by origin state, color by destination state
@@ -371,47 +516,55 @@ plot.rfmstate_diag <- function(x, type = c("brier", "concordance",
 
 #' Plot predicted state occupation
 #' @noRd
-.plot_state_occ_pred <- function(times, occ, state_names, col, main, ...) {
-  ns <- length(state_names)
+.plot_state_occ_pred <- function(times, occ, state_names, states, col, main,
+                                 xlab, ylab, ...) {
+  state_idx <- match(states, state_names)
 
   plot(NULL, xlim = range(times), ylim = c(0, 1),
-       xlab = "Time", ylab = "Probability",
+       xlab = xlab, ylab = ylab,
        main = main, ...)
 
-  for (i in seq_len(ns)) {
-    lines(times, occ[i, ], col = col[i], lwd = 2)
+  for (i in seq_along(state_idx)) {
+    lines(times, occ[state_idx[i], ], col = col[state_idx[i]], lwd = 2)
   }
 
-  legend("topright", legend = state_names, col = col[seq_len(ns)],
+  legend("topright", legend = states, col = col[state_idx],
          lwd = 2, bty = "n", cex = 0.8)
 }
 
 #' Plot predicted transition probabilities
 #' @noRd
-.plot_trans_prob_pred <- function(times, P, state_names, col, main, ...) {
-  ns <- length(state_names)
-
-  plot(NULL, xlim = range(times), ylim = c(0, 1),
-       xlab = "Time", ylab = "Transition Probability from Baseline",
-       main = main, ...)
-
-  for (j in seq_len(ns)) {
-    probs <- P[1, j, ]  # From state 1 (Baseline)
-    lines(times, probs, col = col[j], lwd = 2)
+.plot_trans_prob_pred <- function(times, P, state_names, states, start_state,
+                                  col, main, xlab, ylab, ...) {
+  state_idx <- match(states, state_names)
+  start_idx <- match(start_state, dimnames(P)[[1L]])
+  if (is.na(start_idx)) {
+    stop("The prediction array does not contain the recorded start state.")
   }
 
-  legend("topright", legend = paste("->", state_names),
-         col = col[seq_len(ns)], lwd = 2, bty = "n", cex = 0.8)
+  plot(NULL, xlim = range(times), ylim = c(0, 1),
+       xlab = xlab, ylab = ylab,
+       main = main, ...)
+
+  for (j in seq_along(state_idx)) {
+    probs <- P[start_idx, state_idx[j], ]
+    lines(times, probs, col = col[state_idx[j]], lwd = 2)
+  }
+
+  legend("topright", legend = paste(start_state, "->", states),
+         col = col[state_idx], lwd = 2, bty = "n", cex = 0.8)
 }
 
 #' Plot importance barplot
 #' @noRd
-.plot_importance_bar <- function(imp, col, main, ...) {
+.plot_importance_bar <- function(imp, col, main, xlab, ylab, ...) {
   mat <- imp$importance_matrix
   mat[is.na(mat)] <- 0
   n_vars <- nrow(mat)
 
   if (is.null(col)) col <- .default_palette(n_vars)
+  if (!length(col)) stop("'col' must contain at least one color.")
+  col <- rep_len(col, n_vars)
 
   # mat: rows = features, cols = transitions
   # barplot(mat, beside=TRUE) groups by columns (transitions),
@@ -420,7 +573,7 @@ plot.rfmstate_diag <- function(x, type = c("brier", "concordance",
   on.exit(par(op))
 
   barplot(mat, beside = TRUE, col = col[seq_len(n_vars)],
-          main = main, xlab = "Importance", horiz = TRUE,
+          main = main, xlab = xlab, ylab = ylab, horiz = TRUE,
           las = 1, cex.names = 0.7, ...)
 
   legend("topright", inset = c(-0.2, 0),
@@ -430,7 +583,7 @@ plot.rfmstate_diag <- function(x, type = c("brier", "concordance",
 
 #' Plot importance heatmap
 #' @noRd
-.plot_importance_heat <- function(imp, col, main, ...) {
+.plot_importance_heat <- function(imp, col, main, xlab, ylab, ...) {
   mat <- imp$importance_matrix
   mat[is.na(mat)] <- 0
 
@@ -439,9 +592,15 @@ plot.rfmstate_diag <- function(x, type = c("brier", "concordance",
 
   # Color gradient
   n_cols <- 100
-  col_pal <- grDevices::colorRampPalette(
-    c("white", "#fee0d2", "#fc9272", "#de2d26")
-  )(n_cols)
+  if (is.null(col)) {
+    col <- c("white", "#fee0d2", "#fc9272", "#de2d26")
+  }
+  if (!length(col)) stop("'col' must contain at least one color.")
+  col_pal <- if (length(col) == 1L) {
+    rep(col, n_cols)
+  } else {
+    grDevices::colorRampPalette(col)(n_cols)
+  }
 
   # Normalize
   mat_norm <- (mat - min(mat)) / (max(mat) - min(mat) + 1e-10)
@@ -451,7 +610,7 @@ plot.rfmstate_diag <- function(x, type = c("brier", "concordance",
 
   image(seq_len(nc), seq_len(nr), t(mat_norm),
         col = col_pal, axes = FALSE,
-        xlab = "", ylab = "", main = main)
+        xlab = xlab, ylab = ylab, main = main, ...)
 
   axis(1, at = seq_len(nc), labels = colnames(mat),
        las = 2, cex.axis = 0.7)
@@ -469,76 +628,36 @@ plot.rfmstate_diag <- function(x, type = c("brier", "concordance",
 
 #' Plot Brier scores
 #' @noRd
-.plot_brier <- function(diag, col, main, ...) {
+.plot_brier <- function(diag, col, main, xlab, ylab, ...) {
   brier <- diag$brier
-  n_trans <- length(brier)
-  if (is.null(col)) col <- .default_palette(n_trans)
-
-  # Find y range
-  all_brier <- unlist(lapply(brier, function(b) b$brier))
-  all_brier <- all_brier[!is.na(all_brier)]
-  if (length(all_brier) == 0) {
-    message("No valid Brier scores to plot.")
-    return(invisible(NULL))
+  if (is.null(brier) || !nrow(brier)) {
+    stop("No patient-level cross-validated Brier score is present; rerun ",
+         "diagnose(..., method = 'cv').")
   }
-
-  all_times <- unlist(lapply(brier, function(b) b$time))
-  plot(NULL, xlim = range(all_times, na.rm = TRUE),
-       ylim = c(0, max(all_brier, na.rm = TRUE) * 1.1),
-       xlab = "Time", ylab = "Brier Score",
-       main = main, ...)
-
-  for (i in seq_along(brier)) {
-    b <- brier[[i]]
-    valid <- !is.na(b$brier)
-    if (sum(valid) > 1) {
-      lines(b$time[valid], b$brier[valid], col = col[i], lwd = 2)
-    }
-  }
-
-  legend("bottomright", legend = names(brier), col = col[seq_len(n_trans)],
-         lwd = 2, bty = "n", cex = 0.6)
+  if (is.null(col)) col <- "#2c7fb8"
+  if (!length(col)) stop("'col' must contain at least one color.")
+  plot(brier$time, brier$brier, type = "l", lwd = 2, col = col[1L],
+       xlab = xlab, ylab = ylab, main = main, ...)
 }
 
 #' Plot concordance indices
 #' @noRd
-.plot_concordance <- function(diag, col, main, ...) {
+.plot_concordance <- function(diag, col, main, xlab, ylab, ...) {
   cdf <- diag$concordance
   n <- nrow(cdf)
   if (is.null(col)) col <- .default_palette(n)
+  if (!length(col)) stop("'col' must contain at least one color.")
+  col <- rep_len(col, n)
 
   op <- par(mar = c(8, 4, 3, 2))
   on.exit(par(op))
 
   bp <- barplot(cdf$c_index, names.arg = cdf$transition,
                 col = col[seq_len(n)], main = main,
-                ylab = "C-index", ylim = c(0, 1),
+                xlab = xlab, ylab = ylab, ylim = c(0, 1),
                 las = 2, cex.names = 0.7, ...)
   abline(h = 0.5, lty = 2, col = "gray50")
   text(bp, cdf$c_index + 0.03, round(cdf$c_index, 3), cex = 0.8)
-}
-
-#' Plot bias-variance decomposition
-#' @noRd
-.plot_bias_variance <- function(diag, col, main, ...) {
-  bv <- diag$bias_variance
-  n <- nrow(bv)
-
-  mat <- rbind(abs(bv$bias), bv$variance)
-  rownames(mat) <- c("| Bias |", "Variance")
-
-  if (is.null(col)) col <- c("#4292c6", "#ef6548")
-
-  op <- par(mar = c(8, 4, 3, 8), xpd = TRUE)
-  on.exit(par(op))
-
-  barplot(mat, beside = TRUE, names.arg = bv$transition,
-          col = col[1:2], main = main,
-          ylab = "Value", las = 2, cex.names = 0.7, ...)
-
-  legend("topright", inset = c(-0.25, 0),
-         legend = c("| Bias |", "Variance"),
-         fill = col[1:2], bty = "n", cex = 0.8)
 }
 
 #' Plot Transition Diagram
@@ -552,23 +671,39 @@ plot.rfmstate_diag <- function(x, type = c("brier", "concordance",
 #' @param msdata Optional \code{msdata} object to annotate with counts.
 #' @param col Node colors. Default uses the standard palette.
 #' @param main Title.
+#' @param xlab,ylab Optional axis labels; defaults are blank because graph
+#'   coordinates have no statistical scale.
 #' @param ... Ignored.
 #'
 #' @return No return value, called for its side effect of producing a plot.
 #'
+#' @section Limitations:
+#' The layout is descriptive and preserves the validated DAG. It does not
+#' represent cycles/recurrent visits, transition intensity, uncertainty, or
+#' edge direction over calendar time. Counts are shown only when a compatible
+#' \code{msdata} object is supplied.
+#'
 #' @examples
 #' ms <- clinical_states()
-#' plot_transition_diagram(ms)
+#' plot_transition_diagram(ms, xlab = "Graph layer")
 #'
 #' @export
 plot_transition_diagram <- function(structure, msdata = NULL,
                                     col = NULL, main = "Transition Diagram",
-                                    ...) {
+                                    xlab = "", ylab = "", ...) {
+  if (!inherits(structure, "mstate_structure")) {
+    stop("'structure' must be an mstate_structure object.")
+  }
+  if (!is.null(msdata) && !inherits(msdata, "msdata")) {
+    stop("'msdata' must be NULL or an msdata object.")
+  }
   state_names <- structure$state_names
   ns <- structure$n_states
   trans_list <- structure$trans_list
 
   if (is.null(col)) col <- .default_palette(ns)
+  if (!length(col)) stop("'col' must contain at least one color.")
+  col <- rep_len(col, ns)
 
   # Compute layered layout
   layout <- .layout_states(state_names, structure)
@@ -591,7 +726,7 @@ plot_transition_diagram <- function(structure, msdata = NULL,
   plot(NULL,
        xlim = c(min(pos_x) - x_pad, max(pos_x) + x_pad),
        ylim = c(min(pos_y) - y_pad, max(pos_y) + y_pad),
-       xlab = "", ylab = "", main = main, axes = FALSE, asp = 1)
+       xlab = xlab, ylab = ylab, main = main, axes = FALSE, asp = 1)
 
   # Color palette for transitions
   n_trans <- nrow(trans_list)
@@ -693,6 +828,7 @@ plot_transition_diagram <- function(structure, msdata = NULL,
          border = border_col, lwd = border_lwd)
     text(pos_x[i], pos_y[i], state_names[i], cex = 0.7, font = 2)
   }
+  invisible(NULL)
 }
 
 #' Layered layout for state diagram

@@ -71,3 +71,18 @@ test_that("prepare_data validates inputs", {
     "not found"
   )
 })
+
+test_that("msdata print is a summary and head returns validated ordinary rows", {
+  ms <- define_multistate(c("Z", "A"), "A", list(Z = "A"))
+  dat <- data.frame(id = 1:3, x = 1:3, time_A = 1:3, censor = NA_real_)
+  long <- prepare_data(dat, "id", ms, list(A = "time_A"), "censor", "x")
+
+  expect_output(print(long), "Multistate Data")
+  expect_output(print(long), "Z")
+  rows <- head(long, 2)
+  expect_s3_class(rows, "data.frame")
+  expect_false(inherits(rows, "msdata"))
+  expect_equal(nrow(rows), 2)
+  expect_error(head(long, -1), "nonnegative integer")
+  expect_error(head(long, NA_real_), "nonnegative integer")
+})

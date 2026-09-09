@@ -35,19 +35,33 @@ A data frame in wide format with columns:
 }
 \description{
 Generates realistic clinical trial data with covariates and multistate
-event times for testing and demonstration. Works with any multistate
-structure.
+event times for testing and demonstration. The structure must be an acyclic,
+non-recurrent graph with one common initial state.
 }
 \details{
-Transition intensities follow Weibull distributions with covariate effects
+Cause-specific transition hazards follow Weibull distributions with covariate effects
 on the scale parameter. For the default \code{\link{clinical_states}()}
 structure, transition-specific parameters are calibrated to produce
 realistic clinical trial trajectories. For custom structures, sensible
 default parameters are used for all transitions.
+
+Event waiting times remain at full numerical precision. External
+censoring is generated before each path and truncates it, so no event is
+retained after censoring or after entry into any absorbing state. Supplying
+the same \code{seed}, arguments, structure, and package version reproduces
+the returned data.
 }
+\section{Limitations}{
+
+This helper supplies demonstration and test data, not the final manuscript
+simulation design. It uses four fixed baseline covariates and simple
+transition-specific Weibull cause-specific hazards. It does not generate
+left truncation, recurrent/cyclic histories, time-dependent covariates,
+interval-censored transitions, or ongoing-sojourn predictions.
+}
+
 \examples{
-set.seed(123)
-dat <- sim_clinical_data(n = 100)
+dat <- sim_clinical_data(n = 100, seed = 123)
 head(dat)
 summary(dat)
 

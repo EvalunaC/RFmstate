@@ -1,0 +1,58 @@
+#' Print RFmstate Result Objects
+#'
+#' Concise print methods for fitted models, predictions, direct semi-Markov
+#' probability results, Aalen--Johansen point estimates, importance results,
+#' diagnostics, and fitted-model summaries.
+#'
+#' @param x An object of the class required by the selected print method:
+#'   \code{rfmstate}, \code{rfmstate_pred}, \code{trans_prob},
+#'   \code{aj_estimate}, \code{rfmstate_importance},
+#'   \code{rfmstate_diag}, or \code{summary.rfmstate}.
+#' @param ... Ignored.
+#'
+#' @return \code{x}, invisibly.
+#'
+#' @details Printed values are deliberately concise and rounded only for
+#' display. Stored numerical results are unchanged. The fitted-model and
+#' summary methods identify edge-level ranger OOB quantities; prediction and
+#' direct-probability methods state their fresh-entry conditioning; the AJ
+#' method states that it returns point estimates only; and the diagnostic
+#' method distinguishes edge OOB output from patient-level cross-validation.
+#' The example is in a \code{donttest} block because it fits survival forests to
+#' exercise every result class.
+#'
+#' @section Limitations:
+#' Print methods are descriptive and do not revalidate, refit, or add
+#' uncertainty. Rounded importance or probability values must not be used in
+#' downstream calculations. Edge OOB statistics are not full-state validation,
+#' negative permutation importance is not a protective/causal effect, forest
+#' confidence intervals are unavailable, and AJ confidence intervals are not
+#' returned.
+#'
+#' @examples
+#' \donttest{
+#' ms <- define_multistate(c("A", "B"), "B", list(A = "B"))
+#' dat <- data.frame(id = 1:60, x = seq(-1, 1, length.out = 60),
+#'                   time_B = 1:60, censor = NA_real_)
+#' long <- prepare_data(dat, "id", ms, list(B = "time_B"), "censor", "x")
+#' fit <- rfmstate(long, num.trees = 20, min.node.size = 3,
+#'                 min_events = 3, sparse_warning = Inf, seed = 42)
+#' pred <- predict(fit, data.frame(x = 0), times = c(0, 10),
+#'                 target_grid_points = 64, max_grid_points = 1025)
+#' tt <- seq(0, 10, length.out = 1001)
+#' tp <- compute_trans_prob(
+#'   list("A->B" = data.frame(time = tt, hazard = 0.1 * tt)),
+#'   ms, times = c(0, 5, 10), target_grid_points = 128
+#' )
+#' aj <- aalen_johansen(long)
+#' print(fit)
+#' print(pred)
+#' print(tp)
+#' print(aj)
+#' print(importance(fit))
+#' print(diagnose(fit))
+#' print(summary(fit))
+#' }
+#'
+#' @name print_rfmstate_objects
+NULL

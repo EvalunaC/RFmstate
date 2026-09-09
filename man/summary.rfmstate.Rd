@@ -12,17 +12,32 @@
 \item{...}{Ignored.}
 }
 \value{
-An object of class \code{"summary.rfmstate"}, printed invisibly.
+An object of class \code{"summary.rfmstate"} containing the stored
+  call, covariates, forest parameters, patient/event/interval totals,
+  structure, and a per-edge table of risk-set size, target events,
+  competing/non-target exits, external censoring, ranger OOB error,
+  ranger OOB concordance, and verified OOB coverage.
 }
 \description{
 Provides a comprehensive summary of the fitted model including per-origin
 state information, OOB prediction error, and transition event counts.
 }
+\details{
+The per-edge OOB concordance is \code{1 - prediction.error} from
+ranger for that edge's binary cause-specific endpoint. The printed summary
+also lists every forwarded ranger argument.
+}
+\section{Limitations}{
+
+Edge OOB values do not validate assembled full-state probabilities and may
+be unstable for sparse transitions. Use \code{diagnose(..., method = "cv")}
+for patient-level held-out full-state Brier scoring.
+}
+
 \examples{
 \donttest{
 ms <- clinical_states()
-set.seed(42)
-dat <- sim_clinical_data(n = 200, structure = ms)
+dat <- sim_clinical_data(n = 200, structure = ms, seed = 42)
 msdata <- prepare_data(
   data = dat, id = "ID", structure = ms,
   time_map = list(
@@ -35,8 +50,7 @@ msdata <- prepare_data(
   censor_col = "time_censored",
   covariates = c("age", "sex", "BMI", "treatment")
 )
-fit <- rfmstate(msdata, covariates = c("age", "sex", "BMI", "treatment"),
-                num.trees = 100)
+fit <- rfmstate(msdata, num.trees = 100, seed = 42)
 summary(fit)
 }
 

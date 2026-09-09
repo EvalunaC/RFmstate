@@ -15,58 +15,62 @@ prepare_data(
 )
 }
 \arguments{
-\item{data}{A data frame in wide format with one row per patient.}
+\item{data}{A data frame with one row per subject.}
 
-\item{id}{Character string, name of the patient ID column.}
+\item{id}{Name of the unique subject-ID column.}
 
-\item{structure}{An \code{mstate_structure} object from
+\item{structure}{An \code{mstate_structure} from
 \code{\link{define_multistate}}.}
 
-\item{time_map}{A named list mapping state names to column names in
-\code{data} containing the time of entry into that state (measured from
-baseline). The initial state should not be included. Use \code{NA} in the
-data for states not visited by a patient.}
+\item{time_map}{Named list mapping every noninitial state exactly once to its
+first and only calendar-time entry column. The initial state is excluded.}
 
-\item{censor_col}{Character string, name of the column containing the right
-censoring time (last follow-up time).}
+\item{censor_col}{Name of the external right-censoring column.}
 
-\item{covariates}{Character vector of covariate column names to carry into
-the long-format data.}
+\item{covariates}{Explicit character vector of baseline, time-fixed
+predictors. Use \code{character(0)} only for preparation/AJ workflows.}
 
-\item{initial_state}{Character string, the starting state for all patients
-(default: first state in the structure).}
+\item{initial_state}{Common initial state. It must equal the unique graph
+root; the default is stored in \code{structure}.}
 }
 \value{
-An object of class \code{"msdata"} (a data frame) with columns:
-  \describe{
-    \item{id}{Patient identifier.}
-    \item{from}{Origin state for this interval.}
-    \item{to}{Destination state (or \code{NA} if censored).}
-    \item{Tstart}{Start time of the interval.}
-    \item{Tstop}{End time of the interval.}
-    \item{status}{1 if a transition occurred, 0 if censored.}
-    \item{trans_id}{Integer transition ID (from structure) or \code{NA}.}
-    \item{duration}{Duration of the interval.}
-    \item{...}{Covariate columns.}
-  }
-  The object also carries an attribute \code{"structure"} (the
-  \code{mstate_structure}).
+An \code{msdata} data frame containing \code{id}, \code{from},
+  \code{to}, \code{Tstart}, \code{Tstop}, \code{status},
+  \code{trans_id}, \code{duration}, and retained covariates. Metadata store
+  the graph, source-role table, predictor contract, descriptive preparation
+  schema, counts, and observed duration support.
 }
 \description{
-Converts wide-format clinical data into long counting-process format
-suitable for multistate survival analysis.
+Converts one-row-per-subject wide data into validated, long-form sojourn
+records for an acyclic, non-recurrent multistate process. Entry times are
+calendar times from a common origin; forest response times are the resulting
+clock-reset durations within states.
 }
 \details{
-Each patient's trajectory is reconstructed from event times, validated
-against the allowed transitions, and expanded into start-stop intervals with
-covariates.
+Delayed entry, recurrent visits, tied entry times, time-dependent
+  covariates, and missing covariates are unsupported. Invalid trajectories
+  produce an error; no event or interval is silently discarded. Character
+  covariates are converted to factors in first-observed level order, and the
+  resulting preparation schema is descriptive only. Every model fit and
+  cross-validation refit rebuilds its schema from its own fitting rows.
+  Subject ID, mapped entry times, censoring time, reserved long-format names,
+  and names beginning \code{.rfm_} cannot be predictors.
 }
+\section{Limitations}{
+
+The input must contain one row per subject, one common initial state at time
+zero, and at most one exact entry time per noninitial state. Left
+truncation, cycles/recurrent visits, tied or interval-censored transitions,
+time-dependent covariates, missing fitting covariates, events after
+censoring, and events after absorption are rejected. A nonabsorbed subject
+requires a finite censoring time strictly after the last state entry.
+}
+
 \examples{
 ms <- clinical_states()
-set.seed(42)
-dat <- sim_clinical_data(n = 50, structure = ms)
+dat <- sim_clinical_data(n = 50, structure = ms, seed = 42)
 msdata <- prepare_data(
-  data = dat, id = "ID", structure = ms,
+  dat, id = "ID", structure = ms,
   time_map = list(
     Responded = "time_Responded",
     Unresponded = "time_Unresponded",

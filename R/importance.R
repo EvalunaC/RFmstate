@@ -1,7 +1,8 @@
 #' Feature Importance per Transition
 #'
 #' Extracts and organizes variable importance scores from the fitted random
-#' forest models for each transition.
+#' forest models for each transition. These are ranger permutation-importance
+#' scores based on edge-specific OOB predictive loss, not causal effects.
 #'
 #' @param object A fitted \code{rfmstate} model (must have been fit with
 #'   \code{importance != "none"}).
@@ -10,18 +11,30 @@
 #' @return An object of class \code{"rfmstate_importance"} containing:
 #'   \describe{
 #'     \item{importance}{Data frame with columns \code{variable},
-#'       \code{from}, \code{to}, \code{importance}.}
+#'       \code{from}, \code{to}, \code{transition}, \code{n_events}, and
+#'       \code{importance}.}
 #'     \item{importance_matrix}{Matrix with variables as rows and transitions
 #'       as columns.}
 #'     \item{covariates}{Covariate names.}
 #'     \item{transitions}{Character vector of transition labels.}
 #'   }
 #'
+#' @details Values are transition-specific and may have different effective
+#'   sample sizes. Negative values can arise from Monte Carlo variation, sparse
+#'   events, correlated predictors, or noise; they do not indicate protective
+#'   or causal effects. Repeated seeds/resamples are needed to assess stability.
+#'
+#' @section Limitations:
+#' Importance describes transition-specific predictive contribution under the
+#' fitted ranger endpoint. Values are not causal effects, are not directly
+#' comparable across edges with different risk sets/event counts, and do not
+#' validate the assembled full-state probability model. Models fitted with
+#' \code{importance = "none"} return unavailable values.
+#'
 #' @examples
 #' \donttest{
 #' ms <- clinical_states()
-#' set.seed(42)
-#' dat <- sim_clinical_data(n = 200, structure = ms)
+#' dat <- sim_clinical_data(n = 200, structure = ms, seed = 42)
 #' msdata <- prepare_data(
 #'   data = dat, id = "ID", structure = ms,
 #'   time_map = list(
@@ -34,8 +47,7 @@
 #'   censor_col = "time_censored",
 #'   covariates = c("age", "sex", "BMI", "treatment")
 #' )
-#' fit <- rfmstate(msdata, covariates = c("age", "sex", "BMI", "treatment"),
-#'                 num.trees = 100)
+#' fit <- rfmstate(msdata, num.trees = 100, seed = 42)
 #' imp <- importance(fit)
 #' print(imp)
 #' }
@@ -45,6 +57,7 @@ importance <- function(object, ...) {
   UseMethod("importance")
 }
 
+#' @rdname importance
 #' @export
 importance.rfmstate <- function(object, ...) {
   covariates <- object$covariates
@@ -56,10 +69,11 @@ importance.rfmstate <- function(object, ...) {
   for (state_h in names(object$models)) {
     for (dest in names(object$models[[state_h]])) {
       rf_model <- object$models[[state_h]][[dest]]
-      trans_label <- paste(state_h, "->", dest)
+      trans_label <- paste0(state_h, "->", dest)
       transitions <- c(transitions, trans_label)
 
       vi <- rf_model$variable.importance
+      n_events <- object$edge_metadata[[trans_label]]$n_events
       if (is.null(vi)) {
         vi <- stats::setNames(rep(NA_real_, length(covariates)), covariates)
       }
@@ -71,6 +85,7 @@ importance.rfmstate <- function(object, ...) {
           from = state_h,
           to = dest,
           transition = trans_label,
+          n_events = n_events,
           importance = as.numeric(val),
           stringsAsFactors = FALSE
         )
@@ -105,6 +120,7 @@ importance.rfmstate <- function(object, ...) {
   )
 }
 
+#' @rdname print_rfmstate_objects
 #' @export
 print.rfmstate_importance <- function(x, ...) {
   cat("Feature Importance per Transition\n")

@@ -31,6 +31,9 @@ test_that("aalen_johansen computes valid estimates", {
   last_P <- aj$trans_prob[[length(aj$trans_prob)]]
   row_sums <- rowSums(last_P)
   expect_true(all(abs(row_sums - 1) < 0.05))
+  expect_false("variance" %in% names(aj))
+  expect_equal(aj$initial_state, "Baseline")
+  expect_error(aalen_johansen(msdata, s = 1), "Only s = 0")
 })
 
 test_that("aalen_johansen handles empty data gracefully", {
@@ -50,4 +53,21 @@ test_that("aalen_johansen handles empty data gracefully", {
   class(msdata) <- c("msdata", "data.frame")
 
   expect_error(aalen_johansen(msdata), "No events")
+})
+
+test_that("two-state AJ point estimates agree with Kaplan-Meier", {
+  ms <- define_multistate(c("A", "B"), "B", list(A = "B"))
+  dat <- data.frame(
+    id = 1:8, x = 1:8,
+    time_B = c(1, 2, 3, 4, 5, NA, NA, NA),
+    censor = c(NA, NA, NA, NA, NA, 2.5, 4.5, 6)
+  )
+  long <- prepare_data(dat, "id", ms, list(B = "time_B"), "censor", "x")
+  aj <- aalen_johansen(long)
+  followup <- ifelse(is.na(dat$time_B), dat$censor, dat$time_B)
+  status <- as.integer(!is.na(dat$time_B))
+  km <- survival::survfit(survival::Surv(followup, status) ~ 1)
+  km_at_events <- summary(km, times = aj$time, extend = TRUE)$surv
+  expect_equal(aj$state_occ[, "A"], km_at_events, tolerance = 1e-12)
+  expect_equal(aj$state_occ[, "B"], 1 - km_at_events, tolerance = 1e-12)
 })

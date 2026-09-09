@@ -30,12 +30,24 @@ An object of class \code{"mstate_structure"} containing:
     \item{n_transitions}{Total number of allowed transitions.}
     \item{trans_list}{Data frame listing all transitions with columns
       \code{trans_id}, \code{from}, \code{to}.}
+    \item{initial_state}{The unique graph root used as the common initial
+      state.}
+    \item{topological_order}{State order used by the semi-Markov solver.}
   }
 }
 \description{
 Defines the state space, absorbing states, and allowed transitions for a
 multistate model.
 }
+\section{Limitations}{
+
+Only directed acyclic, non-recurrent structures with exactly one root and at
+least one absorbing state are supported. Every transient state must be
+reachable from the root and must have a directed path to absorption. Cycles,
+self-transitions, recurrent visits, disconnected states, and multiple
+subject-specific initial states are rejected.
+}
+
 \examples{
 ms <- define_multistate(
   state_names = c("Baseline", "Responded", "Progressed", "Death"),

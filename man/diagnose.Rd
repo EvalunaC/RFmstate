@@ -3,72 +3,95 @@
 \name{diagnose}
 \alias{diagnose}
 \alias{diagnose.rfmstate}
-\title{Diagnostics for Random Forest Multistate Model}
+\title{Diagnostics and Patient-Level Validation for RFmstate}
 \usage{
 diagnose(object, ...)
 
-\method{diagnose}{rfmstate}(object, eval_times = NULL, ...)
+\method{diagnose}{rfmstate}(
+  object,
+  eval_times = NULL,
+  method = c("edge_oob", "cv"),
+  folds = 5L,
+  repeats = 1L,
+  seed = 2026L,
+  g_min = 0.05,
+  ...
+)
 }
 \arguments{
 \item{object}{A fitted \code{rfmstate} model.}
 
-\item{...}{Ignored.}
+\item{...}{Ignored; validation settings must use the documented arguments.}
 
-\item{eval_times}{Numeric vector of times at which to evaluate
-diagnostics. If \code{NULL}, uses quantiles of event times.}
+\item{eval_times}{Prespecified calendar-time validation horizons. For
+\code{method="cv"}, defaults to nine points inside 80 percent of the
+fitted conservative support.}
+
+\item{method}{\code{"edge_oob"} (default) or \code{"cv"}.}
+
+\item{folds}{Positive integer number of patient-level folds for
+cross-validation.}
+
+\item{repeats}{Positive integer number of repeated fold assignments.}
+
+\item{seed}{Nonnegative integer fold-assignment and refit seed.}
+
+\item{g_min}{Minimum allowed training-fold censoring survival, strictly
+between zero and one.}
 }
 \value{
-An object of class \code{"rfmstate_diag"} containing:
-  \describe{
-    \item{oob_error}{Data frame of OOB prediction errors per transition.}
-    \item{brier}{List of time-dependent Brier score components per
-      transition.}
-    \item{concordance}{Data frame of concordance indices per transition.}
-    \item{bias_variance}{Data frame of bias-variance decomposition per
-      transition.}
-    \item{eval_times}{Evaluation times used.}
-  }
+An \code{rfmstate_diag} object. Edge OOB tables
+  (\code{edge_oob}, \code{oob_error}, and \code{concordance}) are always
+  present. With cross-validation, \code{brier} is a full-state IPCW score
+  table, \code{ibs} is its trapezoidal integral over
+  \code{integration_interval}, and fold assignments/support/seeds are stored
+  in \code{assignments} and \code{fold_summary}; \code{folds} is a
+  backward-compatible alias for \code{fold_summary}. The object also records
+  evaluation times, whether their grid was prespecified or exploratory,
+  censoring model, \code{g_min}, method, and an explicit validation label.
 }
 \description{
-Computes diagnostic measures including OOB-based prediction error,
-Brier score, concordance index, and bias-variance decomposition for
-each transition-specific model.
+Reports genuine ranger edge-specific OOB concordance. Optionally, complete
+patient-level cross-validation refits every edge forest and returns IPCW
+full-state Brier scores and an integrated Brier score.
 }
 \details{
-The bias-variance decomposition uses OOB predictions from the random
-forest ensemble. For each transition:
-\itemize{
-  \item \strong{Bias}: systematic difference between predicted and
-    observed survival.
-  \item \strong{Variance}: variability of predictions across trees
-    (estimated from tree-level OOB predictions when available).
-  \item \strong{Brier score}: integrated prediction error combining bias
-    and variance.
-  \item \strong{C-index}: concordance between predicted risk and
-    observed event ordering.
+Ranger OOB concordance is \code{1 - prediction.error} for each
+  binary cause-specific edge endpoint. It does not validate the assembled
+  multistate probability vector. Full-state scores use subject-level held-out
+  predictions and training-fold Kaplan--Meier censoring estimates. The
+  stronger marginal independent-censoring assumption applies to these KM
+  weights. Fold assignment occurs before schema construction; unordered
+  factor levels and numeric ranges are reconstructed from training subjects
+  only. A held-out-only factor level is an explicit fold failure. No
+  bias--variance decomposition is provided.
 }
+\section{Limitations}{
+
+Edge OOB concordance applies only to separate binary cause-specific
+endpoints and is not a full-pipeline validation score. Cross-validation
+currently uses a training-fold marginal Kaplan--Meier censoring model and
+therefore requires marginal independent censoring for the score. Every fold
+must fit every declared edge and cover all evaluation horizons; failures,
+sparse edges, or censoring survival below \code{g_min} stop validation. No
+calibration model, prediction interval, or bias--variance decomposition is
+returned. Automatically generated evaluation times are exploratory and are
+labeled as such; confirmatory work should supply prespecified times.
 }
+
 \examples{
 \donttest{
 ms <- clinical_states()
-set.seed(42)
-dat <- sim_clinical_data(n = 200, structure = ms)
-msdata <- prepare_data(
-  data = dat, id = "ID", structure = ms,
-  time_map = list(
-    Responded = "time_Responded",
-    Unresponded = "time_Unresponded",
-    Stabilized = "time_Stabilized",
-    Progressed = "time_Progressed",
-    Death = "time_Death"
-  ),
-  censor_col = "time_censored",
-  covariates = c("age", "sex", "BMI", "treatment")
+dat <- sim_clinical_data(300, structure = ms, seed = 42)
+long <- prepare_data(
+  dat, "ID", ms,
+  list(Responded="time_Responded", Unresponded="time_Unresponded",
+       Stabilized="time_Stabilized", Progressed="time_Progressed",
+       Death="time_Death"),
+  "time_censored", c("age", "sex", "BMI", "treatment")
 )
-fit <- rfmstate(msdata, covariates = c("age", "sex", "BMI", "treatment"),
-                num.trees = 100)
-diag <- diagnose(fit)
-print(diag)
+fit <- rfmstate(long, num.trees = 100, min_events = 3, seed = 42)
+diagnose(fit)
 }
 
 }

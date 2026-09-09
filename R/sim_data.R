@@ -1,10 +1,10 @@
 #' Simulate Clinical Trial Multistate Data
 #'
 #' Generates realistic clinical trial data with covariates and multistate
-#' event times for testing and demonstration. Works with any multistate
-#' structure.
+#' event times for testing and demonstration. The structure must be an acyclic,
+#' non-recurrent graph with one common initial state.
 #'
-#' Transition intensities follow Weibull distributions with covariate effects
+#' Cause-specific transition hazards follow Weibull distributions with covariate effects
 #' on the scale parameter. For the default \code{\link{clinical_states}()}
 #' structure, transition-specific parameters are calibrated to produce
 #' realistic clinical trial trajectories. For custom structures, sensible
@@ -32,17 +32,50 @@
 #'       time), or \code{NA} if an absorbing state was reached.}
 #'   }
 #'
+#' @details Event waiting times remain at full numerical precision. External
+#' censoring is generated before each path and truncates it, so no event is
+#' retained after censoring or after entry into any absorbing state. Supplying
+#' the same \code{seed}, arguments, structure, and package version reproduces
+#' the returned data.
+#'
+#' @section Limitations:
+#' This helper supplies demonstration and test data, not the final manuscript
+#' simulation design. It uses four fixed baseline covariates and simple
+#' transition-specific Weibull cause-specific hazards. It does not generate
+#' left truncation, recurrent/cyclic histories, time-dependent covariates,
+#' interval-censored transitions, or ongoing-sojourn predictions.
+#'
 #' @examples
-#' set.seed(123)
-#' dat <- sim_clinical_data(n = 100)
+#' dat <- sim_clinical_data(n = 100, seed = 123)
 #' head(dat)
 #' summary(dat)
 #'
 #' @export
 sim_clinical_data <- function(n = 500, structure = NULL,
                               max_followup = 365, seed = NULL) {
-  if (!is.null(seed)) set.seed(seed)
+  if (!is.null(seed)) {
+    if (!is.numeric(seed) || length(seed) != 1L || !is.finite(seed) ||
+        seed < 0 || seed != as.integer(seed)) {
+      stop("'seed' must be NULL or one nonnegative integer.")
+    }
+    return(.with_local_seed(
+      as.integer(seed),
+      sim_clinical_data(
+        n = n, structure = structure, max_followup = max_followup, seed = NULL
+      )
+    ))
+  }
   if (is.null(structure)) structure <- clinical_states()
+  if (!inherits(structure, "mstate_structure")) {
+    stop("'structure' must be an mstate_structure object.")
+  }
+  if (!is.numeric(n) || length(n) != 1L || n < 1L || n != as.integer(n)) {
+    stop("'n' must be a positive integer.")
+  }
+  if (!is.numeric(max_followup) || length(max_followup) != 1L ||
+      !is.finite(max_followup) || max_followup <= 0) {
+    stop("'max_followup' must be positive and finite.")
+  }
 
   # Generate covariates
   age <- rnorm(n, mean = 60, sd = 12)
@@ -61,18 +94,21 @@ sim_clinical_data <- function(n = 500, structure = NULL,
   )
 
   # Dynamically add time columns for all non-initial states
-  non_initial_states <- structure$state_names[-1]
+  non_initial_states <- setdiff(structure$state_names, structure$initial_state)
   for (s in non_initial_states) {
     dat[[paste0("time_", s)]] <- NA_real_
   }
   dat$time_censored <- NA_real_
 
-  # Censoring time (uniform)
+  # External censoring is drawn before the trajectory and competes with exits.
   cens_time <- runif(n, min = max_followup * 0.3, max = max_followup)
 
   for (i in seq_len(n)) {
     covs <- c(age[i], sex[i], bmi[i], treatment[i])
-    trajectory <- .sim_patient_trajectory(covs, structure, max_followup)
+    stop_time <- min(cens_time[i], max_followup)
+    trajectory <- .sim_patient_trajectory(
+      covs, structure, max_followup, censor_time = stop_time
+    )
 
     for (nm in names(trajectory)) {
       col_name <- paste0("time_", nm)
@@ -81,20 +117,16 @@ sim_clinical_data <- function(n = 500, structure = NULL,
       }
     }
 
-    # Censoring: if no absorbing state reached, use censoring time
-    last_event_time <- max(0, unlist(trajectory), na.rm = TRUE)
+    # Censoring is missing only when absorption was observed before it.
     reached_absorbing <- any(
       names(trajectory) %in% structure$absorbing &
         !is.na(unlist(trajectory[names(trajectory) %in% structure$absorbing]))
     )
 
     if (reached_absorbing) {
-      # Censoring time is after death (effectively not censored)
-      dat$time_censored[i] <- NA
+      dat$time_censored[i] <- NA_real_
     } else {
-      dat$time_censored[i] <- round(
-        max(last_event_time + 1, cens_time[i]), 1
-      )
+      dat$time_censored[i] <- stop_time
     }
   }
 
@@ -106,14 +138,15 @@ sim_clinical_data <- function(n = 500, structure = NULL,
 #' @param structure mstate_structure
 #' @param max_followup Maximum time
 #' @noRd
-.sim_patient_trajectory <- function(covs, structure, max_followup) {
+.sim_patient_trajectory <- function(covs, structure, max_followup,
+                                    censor_time = max_followup) {
   age <- covs[1]
   sex <- covs[2]
   bmi <- covs[3]
   trt <- covs[4]
 
   result <- list()
-  current_state <- structure$state_names[1]  # Baseline
+  current_state <- structure$initial_state
 
   current_time <- 0
 
@@ -124,18 +157,26 @@ sim_clinical_data <- function(n = 500, structure = NULL,
     if (is.null(dests) || length(dests) == 0) break
 
     # Generate competing event times for each destination
-    event_times <- vapply(dests, function(dest) {
-      .sim_transition_time(current_state, dest, covs, current_time)
+    waits <- vapply(dests, function(dest) {
+      .sim_transition_time(current_state, dest, covs)
     }, numeric(1))
+    if (any(!is.finite(waits)) || any(waits <= 0)) {
+      stop("Simulation produced a nonpositive or nonfinite waiting time from state '",
+           current_state, "'.")
+    }
 
     # Find the first event
-    min_idx <- which.min(event_times)
-    event_time <- event_times[min_idx]
+    min_idx <- which.min(waits)
+    event_time <- current_time + waits[min_idx]
     next_state <- dests[min_idx]
 
-    if (event_time > max_followup) break
+    if (!is.finite(event_time) || event_time <= current_time) {
+      stop("Simulation produced an invalid event time from state '",
+           current_state, "'.")
+    }
+    if (event_time >= min(max_followup, censor_time)) break
 
-    result[[next_state]] <- round(event_time, 1)
+    result[[next_state]] <- event_time
     current_time <- event_time
     current_state <- next_state
   }
@@ -145,7 +186,7 @@ sim_clinical_data <- function(n = 500, structure = NULL,
 
 #' Simulate transition time from a specific transition
 #' @noRd
-.sim_transition_time <- function(from, to, covs, current_time) {
+.sim_transition_time <- function(from, to, covs) {
   age <- covs[1]
   sex <- covs[2]
   bmi <- covs[3]
@@ -165,14 +206,7 @@ sim_clinical_data <- function(n = 500, structure = NULL,
 
   scale <- exp(log_scale)
 
-  # Generate Weibull time from current_time (residual)
-  u <- runif(1)
-  # Conditional Weibull: T | T > current_time
-  surv_current <- exp(-(current_time / scale)^shape)
-  surv_target <- surv_current * u
-  if (surv_target <= 0) return(Inf)
-  t_event <- scale * (-log(surv_target))^(1 / shape)
-  t_event
+  stats::rweibull(1L, shape = shape, scale = scale)
 }
 
 #' Get transition-specific simulation parameters

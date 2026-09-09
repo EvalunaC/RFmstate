@@ -9,6 +9,8 @@ plot_transition_diagram(
   msdata = NULL,
   col = NULL,
   main = "Transition Diagram",
+  xlab = "",
+  ylab = "",
   ...
 )
 }
@@ -21,6 +23,9 @@ plot_transition_diagram(
 
 \item{main}{Title.}
 
+\item{xlab, ylab}{Optional axis labels; defaults are blank because graph
+coordinates have no statistical scale.}
+
 \item{...}{Ignored.}
 }
 \value{
@@ -32,8 +37,16 @@ Uses a layered layout that adapts to any number of states and
 automatically routes arrows around intermediate state boxes using
 Bezier curves when needed.
 }
+\section{Limitations}{
+
+The layout is descriptive and preserves the validated DAG. It does not
+represent cycles/recurrent visits, transition intensity, uncertainty, or
+edge direction over calendar time. Counts are shown only when a compatible
+\code{msdata} object is supplied.
+}
+
 \examples{
 ms <- clinical_states()
-plot_transition_diagram(ms)
+plot_transition_diagram(ms, xlab = "Graph layer")
 
 }

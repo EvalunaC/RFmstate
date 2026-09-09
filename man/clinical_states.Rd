@@ -14,6 +14,13 @@ A convenience function that creates the standard clinical trial multistate
 structure with states: Baseline, Responded, Unresponded, Stabilized,
 Progressed, Death.
 }
+\section{Limitations}{
+
+This is a fixed demonstration DAG, not a claim that the package supports
+cyclic or recurrent clinical histories. Use \code{define_multistate()} for
+another supported single-root DAG.
+}
+
 \examples{
 ms <- clinical_states()
 print(ms)

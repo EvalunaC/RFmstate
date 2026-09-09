@@ -12,7 +12,18 @@ knitr::opts_chunk$set(
   message = FALSE,
   warning = FALSE
 )
+
+canonical_seed <- 42L
+canonical_n <- 300L
+canonical_trees <- 200L
+canonical_min_events <- 3L
+canonical_sparse_warning <- 20L
+canonical_covariates <- c("gender", "trt", "weight")
 ```
+
+All sections use one configuration: seed 42, 300 subjects, 200 trees per
+edge, and the predictor set declared during data preparation. These values keep
+the source render practical and are not event-count or tuning recommendations.
 
 ## 1. Simulate Raw Clinical Data
 
@@ -22,8 +33,8 @@ heart failure, be cured, or die. **Cured** and **Death** are absorbing
 states; **Heart Failure** is a transient intermediate state.
 
 ```{r simulate-data}
-set.seed(2026)
-n <- 400
+set.seed(canonical_seed)
+n <- canonical_n
 
 record_id <- seq_len(n)
 gender <- sample(c("Male", "Female"), n, replace = TRUE)
@@ -51,40 +62,44 @@ for (i in seq_len(n)) {
   t_cured <- rweibull(1, shape = 1.5, scale = 250 / trt_effect)
   t_death <- rweibull(1, shape = 1.0, scale = 800 * (1 / wt_effect))
 
-  first_event <- which.min(c(t_hf, t_cured, t_death))
-  first_time <- c(t_hf, t_cured, t_death)[first_event]
+  first_wait_days <- pmax(1L, ceiling(c(t_hf, t_cured, t_death)))
+  first_event <- which.min(first_wait_days)
+  first_day <- first_wait_days[first_event]
 
-  # Censoring at 3 years
-  cens_time <- runif(1, 400, 1095)
+  # Censoring at 3 years. Integer-day waits are rounded upward and constrained
+  # to at least one day so the date representation cannot create zero-duration
+  # sojourns.
+  cens_day <- max(1L, ceiling(runif(1, 400, 1095)))
 
-  if (first_time > cens_time) {
+  if (first_day >= cens_day) {
     # Censored from Treatment state
-    last_followup_date[i] <- trt_date[i] + round(cens_time)
+    last_followup_date[i] <- trt_date[i] + cens_day
     next
   }
 
   if (first_event == 1) {
     # Heart Failure reached
-    heart_failure_date[i] <- trt_date[i] + round(first_time)
+    heart_failure_date[i] <- trt_date[i] + first_day
 
     # From Heart Failure: -> Cured or -> Death
     t_cured2 <- rweibull(1, shape = 1.4, scale = 200 / trt_effect)
     t_death2 <- rweibull(1, shape = 1.2, scale = 400 * (1 / wt_effect))
 
-    second_event <- which.min(c(t_cured2, t_death2))
-    second_time <- first_time + c(t_cured2, t_death2)[second_event]
+    second_wait_days <- pmax(1L, ceiling(c(t_cured2, t_death2)))
+    second_event <- which.min(second_wait_days)
+    second_day <- first_day + second_wait_days[second_event]
 
-    if (second_time > cens_time) {
-      last_followup_date[i] <- trt_date[i] + round(cens_time)
+    if (second_day >= cens_day) {
+      last_followup_date[i] <- trt_date[i] + cens_day
     } else if (second_event == 1) {
-      cured_date[i] <- trt_date[i] + round(second_time)
+      cured_date[i] <- trt_date[i] + second_day
     } else {
-      death_date[i] <- trt_date[i] + round(second_time)
+      death_date[i] <- trt_date[i] + second_day
     }
   } else if (first_event == 2) {
-    cured_date[i] <- trt_date[i] + round(first_time)
+    cured_date[i] <- trt_date[i] + first_day
   } else {
-    death_date[i] <- trt_date[i] + round(first_time)
+    death_date[i] <- trt_date[i] + first_day
   }
 }
 
@@ -171,7 +186,7 @@ msdata <- prepare_data(
     Death = "time_Death"
   ),
   censor_col = "time_censored",
-  covariates = c("gender", "trt", "weight")
+  covariates = canonical_covariates
 )
 print(msdata)
 ```
@@ -201,8 +216,8 @@ plot(aj, type = "cumulative_hazard")
 plot(aj, type = "stacked_transition_prob")
 ```
 
-```{r aj-trans-intensity, fig.cap="Transition intensities over time (AJ)."}
-plot(aj, type = "transition_intensity")
+```{r aj-hazard-increment, fig.cap="Nelson-Aalen hazard increments over time (AJ)."}
+plot(aj, type = "hazard_increment")
 ```
 
 ## 7. Fit Random Forest Model
@@ -210,10 +225,10 @@ plot(aj, type = "transition_intensity")
 ```{r fit-model}
 fit <- rfmstate(
   msdata,
-  covariates = c("gender", "trt", "weight"),
-  num.trees = 500,
-  min.node.size = 15,
-  seed = 2026
+  num.trees = canonical_trees,
+  min_events = canonical_min_events,
+  sparse_warning = canonical_sparse_warning,
+  seed = canonical_seed
 )
 print(fit)
 ```
@@ -249,7 +264,14 @@ rownames(new_patients) <- c("Light male, Drug A",
                              "Average male, Drug A")
 print(new_patients)
 
-pred <- predict(fit, newdata = new_patients, times = seq(30, 1000, by = 30))
+prediction_horizon <- floor(min(fit$max_duration_by_origin))
+prediction_times <- sort(unique(c(
+  0, seq(30, prediction_horizon, by = 30), prediction_horizon
+)))
+# This date-based example has integer-day event times, so an integer-day
+# initial grid aligns with the observed hazard jumps before refinement.
+pred <- predict(fit, newdata = new_patients, times = prediction_times,
+                grid_step = 1)
 print(pred)
 ```
 
@@ -269,6 +291,11 @@ plot(pred, type = "state_occupation", subject = 3)
 plot(pred, type = "transition_prob", subject = 1)
 ```
 
+All four prediction figures come from the same fitted object and prediction
+grid. They are conditional on fresh entry into `Treatment` at elapsed day zero;
+the transition-probability view exposes only that selected starting-state row,
+not a general all-start-state Markov matrix.
+
 ## 11. Diagnostics
 
 ```{r diagnostics}
@@ -276,16 +303,23 @@ diag <- diagnose(fit)
 print(diag)
 ```
 
-```{r brier, fig.cap="Time-dependent Brier score by transition."}
-plot(diag, type = "brier")
-```
-
 ```{r concordance, fig.cap="Concordance index by transition."}
 plot(diag, type = "concordance")
 ```
 
-```{r bias-variance, fig.cap="Bias-variance decomposition by transition."}
-plot(diag, type = "bias_variance")
+Patient-level cross-validation is required for full-state IPCW Brier scores:
+
+Each refit learns factor levels and numeric ranges from its training subjects
+only. A held-out-only factor level fails explicitly, while successful results
+retain exact subject assignments, assignment/refit seeds, per-edge event
+counts, support, and censoring-stability metadata. Confirmatory analyses should
+supply `eval_times` explicitly as below.
+
+```{r cv-brier, eval=FALSE}
+cv_diag <- diagnose(fit, method = "cv", folds = 5,
+                    eval_times = seq(0, prediction_horizon * 0.8,
+                                     length.out = 9))
+plot(cv_diag, type = "brier")
 ```
 
 ## 12. Comparing Treatment Arms
@@ -297,8 +331,10 @@ average patient.
 drug_a <- data.frame(gender = 1, trt = 1, weight = 75)
 drug_b <- data.frame(gender = 1, trt = 0, weight = 75)
 
-pred_a <- predict(fit, newdata = drug_a, times = seq(30, 1000, by = 30))
-pred_b <- predict(fit, newdata = drug_b, times = seq(30, 1000, by = 30))
+pred_a <- predict(fit, newdata = drug_a, times = prediction_times,
+                  grid_step = 1)
+pred_b <- predict(fit, newdata = drug_b, times = prediction_times,
+                  grid_step = 1)
 
 times <- pred_a$time
 states <- ms$state_names

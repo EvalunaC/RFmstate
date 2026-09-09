@@ -6,9 +6,11 @@
 \usage{
 \method{plot}{rfmstate_diag}(
   x,
-  type = c("brier", "concordance", "bias_variance"),
+  type = c("brier", "concordance"),
   col = NULL,
   main = NULL,
+  xlab = NULL,
+  ylab = NULL,
   ...
 )
 }
@@ -16,11 +18,13 @@
 \item{x}{An \code{rfmstate_diag} object.}
 
 \item{type}{Character, one of \code{"brier"} (default),
-\code{"concordance"}, \code{"bias_variance"}.}
+\code{"concordance"}.}
 
-\item{col}{Colors.}
+\item{col}{One or more plot colors; recycled when necessary.}
 
 \item{main}{Title.}
+
+\item{xlab, ylab}{Axis labels.}
 
 \item{...}{Additional arguments.}
 }
@@ -29,6 +33,22 @@ The input \code{x} object, returned invisibly. Called for its
   side effect of producing a plot.
 }
 \description{
-Visualizes diagnostic measures including Brier score curves,
-concordance indices, and bias-variance decomposition.
+Visualizes genuine edge OOB concordance or patient-level cross-validated
+full-state Brier scores.
+}
+\section{Limitations}{
+
+Concordance plots contain separate edge-level ranger OOB statistics, not
+assembled full-state validation. Brier plots require an object produced by
+\code{diagnose(..., method = "cv")} and inherit its censoring/support
+limitations. No bias--variance plot is available.
+}
+
+\examples{
+d <- structure(list(
+  concordance = data.frame(transition = "A->B", c_index = 0.7),
+  brier = NULL
+), class = "rfmstate_diag")
+plot(d, type = "concordance", xlab = "Edge", ylab = "OOB C-index")
+
 }

@@ -2,32 +2,32 @@
 % Please edit documentation in R/aalen_johansen.R
 \name{aalen_johansen}
 \alias{aalen_johansen}
-\title{Aalen-Johansen Nonparametric Estimator}
+\title{Aalen-Johansen Point Estimator}
 \usage{
 aalen_johansen(msdata, s = 0)
 }
 \arguments{
 \item{msdata}{An \code{msdata} object from \code{\link{prepare_data}}.}
 
-\item{s}{Numeric, the starting time for transition probabilities
-(default 0).}
+\item{s}{Legacy numeric starting-time argument. Only \code{0} is accepted.}
 }
 \value{
 An object of class \code{"aj_estimate"} containing:
   \describe{
     \item{time}{Numeric vector of unique event times.}
-    \item{trans_prob}{List of transition probability matrices P(s,t) at each
-      event time.}
+    \item{trans_prob}{List of calendar-time product-integral point-estimate
+      matrices from the recorded common baseline at each event time.}
     \item{state_occ}{Matrix of state occupation probabilities over time.
       Rows are time points, columns are states.}
     \item{cum_hazard}{List of Nelson-Aalen cumulative hazard matrices.}
     \item{hazard_inc}{List of hazard increment matrices at each event time.}
-    \item{variance}{List of Greenwood-type variance estimates for state
-      occupation probabilities.}
     \item{n_risk}{Matrix of at-risk counts over time.}
     \item{n_events}{Data frame of event counts per transition.}
     \item{structure}{The multistate structure used.}
     \item{s}{The starting time.}
+    \item{time_scale}{Calendar time from the common study origin.}
+    \item{uncertainty}{Statement that no validated variance or confidence
+      interval is returned.}
   }
 }
 \description{
@@ -37,14 +37,27 @@ product-integral construction.
 }
 \details{
 The Aalen-Johansen estimator generalizes the Kaplan-Meier estimator to
-multistate models under the Markov assumption and independent right
-censoring. It provides population-level transition probability matrices
-without covariate adjustment.
+multistate models. RFmstate exposes it as a descriptive, covariate-free
+calendar-time population benchmark from the recorded common baseline.
+
+The estimator uses calendar-time risk sets and is separate from the
+  package's clock-reset semi-Markov forest solver. It is a covariate-free
+  descriptive benchmark from the common baseline. Observed competing exits
+  are transitions, not external censoring. No clipping or row normalization
+  is applied.
 }
+\section{Limitations}{
+
+Only the recorded common baseline \code{s = 0} is supported. The function
+does not support left truncation, general conditional \eqn{P(s,t)} for
+\code{s > 0}, covariate adjustment, or validated variance/confidence bands.
+The point estimate should not be described as the covariate-free form of the
+clock-reset forest model.
+}
+
 \examples{
 ms <- clinical_states()
-set.seed(42)
-dat <- sim_clinical_data(n = 200, structure = ms)
+dat <- sim_clinical_data(n = 200, structure = ms, seed = 42)
 msdata <- prepare_data(
   data = dat, id = "ID", structure = ms,
   time_map = list(

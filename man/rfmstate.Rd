@@ -2,7 +2,7 @@
 % Please edit documentation in R/fit_rfmstate.R
 \name{rfmstate}
 \alias{rfmstate}
-\title{Fit Random Forest Multistate Model}
+\title{Fit Clock-Reset Random-Forest Multistate Models}
 \usage{
 rfmstate(
   msdata,
@@ -10,6 +10,8 @@ rfmstate(
   num.trees = 1000L,
   mtry = NULL,
   min.node.size = 15L,
+  min_events = 5L,
+  sparse_warning = 50L,
   importance = "permutation",
   seed = NULL,
   ...
@@ -18,75 +20,113 @@ rfmstate(
 \arguments{
 \item{msdata}{An \code{msdata} object from \code{\link{prepare_data}}.}
 
-\item{covariates}{Character vector of covariate column names to use as
-predictors. If \code{NULL}, all non-structural columns are used.}
+\item{covariates}{Predictor names. \code{NULL} uses the complete stored
+predictor contract; an explicit value must be a nonempty unique subset of
+that contract.}
 
-\item{num.trees}{Integer, number of trees per forest (default 1000).}
+\item{num.trees}{Positive integer number of trees fitted for every edge.}
 
-\item{mtry}{Integer, number of variables to try at each split. Default
-\code{NULL} uses \code{floor(sqrt(p))} where p is number of covariates.}
+\item{mtry}{Positive integer number of predictors considered at each split.
+\code{NULL} uses \code{floor(sqrt(p))}, bounded below by one.}
 
-\item{min.node.size}{Integer, minimum node size (default 15).}
+\item{min.node.size}{Positive integer ranger minimum terminal-node size.}
 
-\item{importance}{Character, variable importance mode. One of
-\code{"permutation"} (default), \code{"impurity"}, or \code{"none"}.}
+\item{min_events}{Explicit technical safeguard for target events per edge.
+It is not a universal adequacy threshold.}
 
-\item{seed}{Integer, random seed for reproducibility (default \code{NULL}).}
+\item{sparse_warning}{Positive integer descriptive event-count threshold for
+an edge warning; set \code{Inf} to disable. It is not a fit threshold.}
 
-\item{...}{Additional arguments passed to \code{\link[ranger]{ranger}}.}
+\item{importance}{One of \code{"permutation"}, \code{"impurity"},
+\code{"impurity_corrected"}, or \code{"none"}. Permutation importance
+is recommended for interpretation under the limitations below.}
+
+\item{seed}{\code{NULL} or one nonnegative integer seed passed to every edge
+forest without changing the caller's RNG state.}
+
+\item{...}{Supported ranger controls: \code{replace},
+\code{sample.fraction}, \code{splitrule}, \code{num.random.splits},
+\code{respect.unordered.factors}, \code{num.threads},
+\code{save.memory}, \code{max.depth}, \code{always.split.variables},
+\code{alpha}, \code{minprop}, and \code{verbose}. Unnamed, conflicting,
+and unknown arguments are rejected. Configurations without genuine OOB
+observations are rejected.}
 }
 \value{
-An object of class \code{"rfmstate"} containing:
-  \describe{
-    \item{models}{Named list of fitted \code{ranger} objects, one per
-      origin state.}
-    \item{structure}{The multistate structure.}
-    \item{covariates}{Character vector of covariate names used.}
-    \item{origin_data}{Named list of per-origin-state data subsets.}
-    \item{event_times}{Named list of unique event times per origin state.}
-    \item{call}{The matched call.}
-    \item{params}{List of tuning parameters used.}
-  }
+An \code{rfmstate} object containing \code{models} for every
+  declared edge; \code{structure}; selected \code{covariates} and
+  \code{predictor_schema}; origin-state fitting data; backend event-time
+  grids; per-edge event, support, ranger-argument, and genuine OOB metadata;
+  the validated \code{msdata}; fit \code{params}; package versions; verified
+  OOB coverage; and the clock-reset semi-Markov time-scale contract.
 }
 \description{
-Fits transition-specific cause-specific random survival forests for
-multistate survival analysis. For each transient origin state, a competing
-risks model is fit using random forests, where the competing events are
-the possible transitions to destination states.
+Fits one ranger cause-specific survival forest for every declared edge of a
+validated acyclic, non-recurrent multistate structure. Forest response time
+is duration since fresh entry into the origin state.
 }
 \details{
-For each transient state \eqn{h}, the method:
-\enumerate{
-  \item Subsets all intervals where the patient is in state \eqn{h}.
-  \item Defines time as the duration in state \eqn{h} (Tstop - Tstart).
-  \item Codes competing events: 0 = censored, 1, 2, ... for each possible
-    destination state.
-  \item Fits a cause-specific random survival forest using
-    \code{\link[ranger]{ranger}} with \code{survival} tree type.
+Every competing exit from an origin state remains an observed exit
+  for that sojourn, but is coded as a non-target outcome in the binary
+  cause-specific forest for a particular edge. An unestimable declared edge
+  stops the whole fit; it is never omitted or represented by zero hazard.
+  The ranger model frame is constructed anew as \code{.rfm_time},
+  \code{.rfm_event}, and the contract-approved predictors. Predictor factor
+  levels and numeric ranges are learned from the actual fitting rows, not
+  copied from a preparation-time or full-data schema.
+}
+\section{Ranger argument contract}{
+
+RFmstate controls and rejects duplicate specification of \code{formula},
+\code{data}, \code{num.trees}, \code{mtry}, \code{min.node.size},
+\code{importance}, \code{seed}, \code{write.forest}, \code{oob.error}, and
+\code{keep.inbag}.
+Unnamed and unknown arguments also fail. The only names accepted through
+\code{...} are:
+\describe{
+  \item{replace, sample.fraction}{Bootstrap/subsampling controls.}
+  \item{splitrule, num.random.splits, alpha, minprop}{Survival split
+    controls supported by the installed ranger version.}
+  \item{respect.unordered.factors}{Unordered-factor handling.}
+  \item{num.threads, save.memory, verbose}{Computation controls.}
+  \item{max.depth}{Maximum tree depth.}
+  \item{always.split.variables}{Predictors always considered for splitting.}
+}
+These arguments retain ranger's definitions and are checked against the
+installed ranger formal arguments before fitting. \code{case.weights},
+\code{class.weights}, \code{split.select.weights}, response controls, and
+every other unlisted ranger argument are rejected in this release.
+Effective sampling defaults are resolved and stored. In particular,
+\code{replace = FALSE, sample.fraction = 1} is rejected because it leaves no
+OOB observations. RFmstate forces \code{oob.error = TRUE} and
+\code{keep.inbag = TRUE}, verifies finite ranger OOB error after every edge
+fit, and stores per-sojourn OOB-tree coverage.
 }
 
-Transition probabilities are then computed by combining per-origin-state
-predicted cumulative hazards via the product-integral formula.
+\section{Limitations}{
+
+The fit supports baseline, time-fixed, complete covariates in single-root
+acyclic non-recurrent data. It does not support left truncation,
+time-dependent covariates, recurrent visits/cycles, missing fitting
+covariates, subject-specific frailty, clock-forward hazards, or confidence
+intervals. Structural, outcome-time, censoring, ID, and arbitrary
+long-format columns cannot be added as predictors. Every declared edge must
+meet \code{min_events}; this technical
+safeguard is not a universal adequacy threshold.
 }
+
 \examples{
 \donttest{
 ms <- clinical_states()
-set.seed(42)
-dat <- sim_clinical_data(n = 200, structure = ms)
-msdata <- prepare_data(
-  data = dat, id = "ID", structure = ms,
-  time_map = list(
-    Responded = "time_Responded",
-    Unresponded = "time_Unresponded",
-    Stabilized = "time_Stabilized",
-    Progressed = "time_Progressed",
-    Death = "time_Death"
-  ),
-  censor_col = "time_censored",
-  covariates = c("age", "sex", "BMI", "treatment")
+dat <- sim_clinical_data(300, structure = ms, seed = 42)
+long <- prepare_data(
+  dat, "ID", ms,
+  list(Responded="time_Responded", Unresponded="time_Unresponded",
+       Stabilized="time_Stabilized", Progressed="time_Progressed",
+       Death="time_Death"),
+  "time_censored", c("age", "sex", "BMI", "treatment")
 )
-fit <- rfmstate(msdata, covariates = c("age", "sex", "BMI", "treatment"))
-print(fit)
+fit <- rfmstate(long, num.trees = 100, min_events = 3, seed = 42)
 }
 
 }

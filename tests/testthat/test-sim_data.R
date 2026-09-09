@@ -85,4 +85,51 @@ test_that("sim_clinical_data is reproducible with seed", {
   dat1 <- sim_clinical_data(n = 20, seed = 42)
   dat2 <- sim_clinical_data(n = 20, seed = 42)
   expect_identical(dat1, dat2)
+  expect_error(sim_clinical_data(n = 5, seed = -1), "nonnegative integer")
+  expect_error(sim_clinical_data(n = 5, seed = 1.5), "nonnegative integer")
+})
+
+test_that("simulation retains full precision and truncates at censoring", {
+  ms <- clinical_states()
+  dat <- sim_clinical_data(n = 500, structure = ms, seed = 42)
+  event_cols <- paste0("time_", setdiff(ms$state_names, ms$initial_state))
+  for (i in seq_len(nrow(dat))) {
+    values <- unlist(dat[i, event_cols, drop = FALSE], use.names = FALSE)
+    values <- values[!is.na(values)]
+    if (!is.na(dat$time_censored[i])) {
+      expect_true(all(values < dat$time_censored[i]))
+    }
+    expect_equal(anyDuplicated(values), 0L)
+  }
+  all_events <- unlist(dat[event_cols], use.names = FALSE)
+  all_events <- all_events[!is.na(all_events)]
+  expect_true(any(abs(all_events * 10 - round(all_events * 10)) > 1e-8))
+})
+
+test_that("simulation supports multiple absorbing states without post-absorption events", {
+  ms <- define_multistate(
+    c("A", "Recovered", "Death"), c("Recovered", "Death"),
+    list(A = c("Recovered", "Death"))
+  )
+  dat <- sim_clinical_data(n = 200, structure = ms, seed = 42)
+  expect_false(any(!is.na(dat$time_Recovered) & !is.na(dat$time_Death)))
+
+  event_times <- c(dat$time_Recovered, dat$time_Death)
+  event_times <- event_times[!is.na(event_times)]
+  expect_true(all(is.finite(event_times)))
+  expect_true(all(event_times > 0))
+  for (i in seq_len(nrow(dat))) {
+    observed <- c(dat$time_Recovered[i], dat$time_Death[i])
+    observed <- observed[!is.na(observed)]
+    if (!is.na(dat$time_censored[i])) {
+      expect_true(all(observed < dat$time_censored[i]))
+    }
+  }
+
+  long <- prepare_data(
+    dat, "ID", ms,
+    list(Recovered = "time_Recovered", Death = "time_Death"),
+    "time_censored", c("age", "sex", "BMI", "treatment")
+  )
+  expect_true(all(long$duration > 0))
 })

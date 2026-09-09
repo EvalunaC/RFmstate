@@ -2,9 +2,12 @@
 % Please edit documentation in R/importance.R
 \name{importance}
 \alias{importance}
+\alias{importance.rfmstate}
 \title{Feature Importance per Transition}
 \usage{
 importance(object, ...)
+
+\method{importance}{rfmstate}(object, ...)
 }
 \arguments{
 \item{object}{A fitted \code{rfmstate} model (must have been fit with
@@ -16,7 +19,8 @@ importance(object, ...)
 An object of class \code{"rfmstate_importance"} containing:
   \describe{
     \item{importance}{Data frame with columns \code{variable},
-      \code{from}, \code{to}, \code{importance}.}
+      \code{from}, \code{to}, \code{transition}, \code{n_events}, and
+      \code{importance}.}
     \item{importance_matrix}{Matrix with variables as rows and transitions
       as columns.}
     \item{covariates}{Covariate names.}
@@ -25,13 +29,28 @@ An object of class \code{"rfmstate_importance"} containing:
 }
 \description{
 Extracts and organizes variable importance scores from the fitted random
-forest models for each transition.
+forest models for each transition. These are ranger permutation-importance
+scores based on edge-specific OOB predictive loss, not causal effects.
 }
+\details{
+Values are transition-specific and may have different effective
+  sample sizes. Negative values can arise from Monte Carlo variation, sparse
+  events, correlated predictors, or noise; they do not indicate protective
+  or causal effects. Repeated seeds/resamples are needed to assess stability.
+}
+\section{Limitations}{
+
+Importance describes transition-specific predictive contribution under the
+fitted ranger endpoint. Values are not causal effects, are not directly
+comparable across edges with different risk sets/event counts, and do not
+validate the assembled full-state probability model. Models fitted with
+\code{importance = "none"} return unavailable values.
+}
+
 \examples{
 \donttest{
 ms <- clinical_states()
-set.seed(42)
-dat <- sim_clinical_data(n = 200, structure = ms)
+dat <- sim_clinical_data(n = 200, structure = ms, seed = 42)
 msdata <- prepare_data(
   data = dat, id = "ID", structure = ms,
   time_map = list(
@@ -44,8 +63,7 @@ msdata <- prepare_data(
   censor_col = "time_censored",
   covariates = c("age", "sex", "BMI", "treatment")
 )
-fit <- rfmstate(msdata, covariates = c("age", "sex", "BMI", "treatment"),
-                num.trees = 100)
+fit <- rfmstate(msdata, num.trees = 100, seed = 42)
 imp <- importance(fit)
 print(imp)
 }

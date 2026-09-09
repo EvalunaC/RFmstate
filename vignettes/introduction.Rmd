@@ -14,31 +14,39 @@ knitr::opts_chunk$set(
   fig.width = 7,
   fig.height = 5
 )
+
+# One configuration is used throughout the vignette. These values keep the
+# source build practical; they are not inferential adequacy recommendations.
+canonical_seed <- 42L
+canonical_n <- 300L
+canonical_trees <- 200L
+canonical_min_events <- 3L
+canonical_sparse_warning <- 20L
+canonical_covariates <- c("age", "sex", "BMI", "treatment")
 ```
 
 ## Overview
 
-**RFmstate** fits cause-specific random survival forests for multistate
-survival analysis with covariate-adjusted transition probabilities computed
-via product-integral. For each transient state, competing transitions are
-modeled by separate random forests, and patient-specific transition
-probability matrices are assembled from the predicted cumulative hazards
-using the product-integral formula. The package also provides a standalone
-Aalen-Johansen nonparametric estimator as a covariate-free baseline. This
-approach is particularly suited for clinical trial data where patients
-transition through discrete health states (e.g., response, progression,
-death) with right censoring and competing transitions.
+**RFmstate** fits clock-reset cause-specific random survival forests for
+acyclic, non-recurrent multistate processes. For each transient state,
+competing exits are modeled by separate forests. Patient/profile
+entry-conditioned state probabilities are assembled from predicted cumulative
+hazards by semi-Markov entry-mass and sojourn convolution. The package also
+provides calendar-time Aalen-Johansen point estimates as a covariate-free
+descriptive baseline. The supported one-row-per-subject contract uses a common
+initial state, one recorded entry per state, baseline covariates, right
+censoring, and competing exits; it does not support left truncation, recurrent
+visits, directed cycles, or time-dependent covariates.
 
 The package provides:
 
 - State space and transition structure definition
 - Wide-to-long data conversion for counting-process format
 - Cause-specific random forest fitting per origin state
-- Transition probability matrices via product-integral of predicted
-  cumulative hazards
-- Aalen-Johansen nonparametric estimation (covariate-free baseline)
+- Entry-conditioned state probabilities via clock-reset semi-Markov convolution
+- Aalen-Johansen calendar-time point estimation (covariate-free baseline)
 - Per-transition feature importance
-- Bias-variance diagnostics with Brier score and concordance index
+- Genuine edge OOB concordance and patient-level cross-validated IPCW scoring
 - Comprehensive visualizations
 
 ## Quick Start
@@ -53,7 +61,7 @@ ms <- clinical_states()
 print(ms)
 ```
 
-Or define a custom structure with any number of states (3 or more):
+Or define another supported single-root, acyclic, non-recurrent structure:
 
 ```{r custom-states, eval=FALSE}
 # A simple 3-state illness-death model
@@ -78,13 +86,15 @@ ms_recovery <- define_multistate(
 )
 ```
 
-This pipeline works with any defined multistate structure.
+The same workflow applies to a validated DAG with one common initial state and
+at least one absorbing state. Cycles and recurrent visits are rejected.
 
 ### 2. Simulate Data
 
 ```{r simulate}
-set.seed(42)
-dat <- sim_clinical_data(n = 300, structure = ms)
+dat <- sim_clinical_data(
+  n = canonical_n, structure = ms, seed = canonical_seed
+)
 head(dat)
 ```
 
@@ -103,14 +113,18 @@ msdata <- prepare_data(
     Death = "time_Death"
   ),
   censor_col = "time_censored",
-  covariates = c("age", "sex", "BMI", "treatment")
+  covariates = canonical_covariates
 )
 print(msdata)
+head(msdata)
 ```
+
+`print(msdata)` is a concise validation summary in the state-definition order;
+`head(msdata)` displays the first six ordinary data rows.
 
 ### 4. Aalen-Johansen Nonparametric Baseline
 
-Compute nonparametric (covariate-free) transition probability estimates:
+Compute the covariate-free calendar-time point-estimate benchmark:
 
 ```{r aj}
 aj <- aalen_johansen(msdata)
@@ -121,27 +135,47 @@ print(aj)
 plot(aj, type = "state_occupation")
 ```
 
+The figure is produced by the immediately preceding `plot()` call and shows
+occupation from the recorded common baseline. It has no confidence band.
+
 ```{r aj-hazard, fig.cap="Nelson-Aalen cumulative hazards"}
 plot(aj, type = "cumulative_hazard")
 ```
+
+This second figure shows Nelson--Aalen cumulative cause-specific hazards.
+Requested destination states can be selected with `states =`.
 
 ### 5. Fit Random Forest Model
 
 ```{r fit}
 fit <- rfmstate(
   msdata,
-  covariates = c("age", "sex", "BMI", "treatment"),
-  num.trees = 200,
-  seed = 42
+  num.trees = canonical_trees,
+  min_events = canonical_min_events,
+  sparse_warning = canonical_sparse_warning,
+  seed = canonical_seed
 )
 print(fit)
 ```
 
+No covariate vector is repeated here: `rfmstate(covariates = NULL)` uses the
+explicit predictor contract stored by `prepare_data()`. An explicit vector may
+select a nonempty subset of that contract, but it cannot add structural,
+outcome-time, censoring, ID, or arbitrary long-format columns. The fitted
+schema is rebuilt from the rows used for the actual fit. Only the documented
+ranger whitelist can be forwarded through `...`; sampling settings that leave
+no genuine OOB observations are rejected.
+
 ### 6. Model Summary
 
 ```{r summary}
-s <- summary(fit)
+summary(fit)
 ```
+
+The summary reports the exact fit controls and separate ranger OOB error and
+OOB concordance for every edge, together with verified OOB coverage and
+separate target-event, competing-exit, and external-censoring counts. Those
+edge metrics are not full-state validation.
 
 ### 7. Feature Importance
 
@@ -151,9 +185,18 @@ print(imp)
 plot(imp, type = "barplot")
 ```
 
+Permutation importance is the transition-specific change in ranger OOB
+predictive loss after permuting a predictor. Negative values can arise from
+Monte Carlo noise, sparse events, correlated predictors, or irrelevant
+variables; they are not causal or protective effects. Event counts are stored
+beside the long-form importance values and should be considered when comparing
+edges.
+
 ```{r importance-heat, fig.cap="Feature importance heatmap"}
 plot(imp, type = "heatmap")
 ```
+
+The heatmap contains the same edge-specific values as the preceding bar plot.
 
 ### 8. Predict for New Patients
 
@@ -165,7 +208,9 @@ newdata <- data.frame(
   treatment = c(1, 0)
 )
 
-pred <- predict(fit, newdata = newdata, times = seq(10, 365, by = 10))
+prediction_horizon <- min(fit$max_duration_by_origin)
+pred <- predict(fit, newdata = newdata,
+                times = seq(0, prediction_horizon, length.out = 37))
 
 # Plot for patient 1 (young, treated)
 plot(pred, type = "state_occupation", subject = 1)
@@ -174,6 +219,11 @@ plot(pred, type = "state_occupation", subject = 1)
 plot(pred, type = "state_occupation", subject = 2)
 ```
 
+Both curves come from the same `pred` object and canonical fit. They are
+conditional on fresh entry into the initial state at elapsed duration zero;
+the public starting-state dimension contains only that requested state. They
+are not ongoing-sojourn dynamic predictions and have no confidence bands.
+
 ### 9. Diagnostics
 
 ```{r diagnostics}
@@ -181,16 +231,24 @@ diag <- diagnose(fit)
 print(diag)
 ```
 
-```{r diag-brier, fig.cap="Time-dependent Brier score"}
-plot(diag, type = "brier")
-```
-
 ```{r diag-concordance, fig.cap="Concordance index per transition"}
 plot(diag, type = "concordance")
 ```
 
-```{r diag-bv, fig.cap="Bias-variance decomposition"}
-plot(diag, type = "bias_variance")
+This figure visualizes genuine ranger OOB concordance separately for each
+binary edge endpoint.
+
+Full-state Brier scores require patient-level cross-validation and refitting;
+they are never assembled from incompatible edge-level OOB predictions. Every
+fold rebuilds its predictor schema from training subjects only. A validation-
+only factor level stops the procedure rather than leaking full-data levels,
+and successful results retain exact subject assignments and refit seeds:
+
+```{r diag-cv, eval=FALSE}
+cv_diag <- diagnose(fit, method = "cv", folds = 5,
+                    eval_times = seq(0, prediction_horizon * 0.8,
+                                     length.out = 9))
+plot(cv_diag, type = "brier")
 ```
 
 ### 10. Transition Diagram
@@ -199,27 +257,66 @@ plot(diag, type = "bias_variance")
 plot_transition_diagram(ms, msdata)
 ```
 
+The diagram uses the original display order and annotates each allowed edge
+with its observed event count.
+
+## Advanced probability assembly
+
+`compute_trans_prob()` is the advanced public route for combining a complete,
+named set of clock-reset cumulative cause-specific hazard curves. The same
+validated solver is used by `predict.rfmstate()`.
+
+```{r direct-probability}
+simple_ms <- define_multistate(c("A", "B"), "B", list(A = "B"))
+elapsed_grid <- seq(0, 2, length.out = 2001)
+simple_hazards <- list(
+  "A->B" = data.frame(time = elapsed_grid,
+                       hazard = 0.4 * elapsed_grid)
+)
+simple_prob <- compute_trans_prob(
+  simple_hazards, simple_ms, times = c(0, 1, 2),
+  target_grid_points = 512
+)
+simple_prob$state_occ
+```
+
+The output rows correspond to the requested elapsed durations and the columns
+to occupied states. The solver evaluates cumulative hazards as step functions,
+checks probability mass, and refines a regular grid without clipping or row
+normalization.
+
+## Input and prediction edge cases
+
+- Left truncation/delayed entry and `s != 0` are unsupported.
+- Cycles, recurrent visits, tied/decreasing transition times, events after
+  censoring or absorption, and nonpositive durations are errors.
+- Fitting covariates must be complete. Prediction profiles must contain every
+  stored predictor with compatible classes, finite values, and no unseen factor
+  levels.
+- Prediction times must lie within the conservative follow-up support. The
+  explicit `extrapolate = "flat"` sensitivity option assumes zero additional
+  hazard beyond support and is unsuitable for primary reported analyses.
+
 ## Methodology
 
-### Product-Integral Framework
+### Separate probability constructions
 
-Both the nonparametric (Aalen-Johansen) and the random forest methods in
-this package compute transition probability matrices $P(s,t)$ using the
-product-integral:
+RFmstate forests use duration since fresh entry into the current state. Their
+predicted cause-specific cumulative hazards are combined by semi-Markov
+entry-mass and sojourn convolution on a validated regular duration grid. The
+output is an entry-conditioned state-occupation array, not a general Markov
+$P(s,t)$ matrix.
 
-$$P(s,t) = \prod_{s < u \leq t} (I + dA(u))$$
-
-where $dA(u)$ is a matrix of hazard increments at time $u$, with off-diagonal
-entries $dA_{hj}(u)$ representing the $h \to j$ transition hazard increment
-and diagonal entries $dA_{hh}(u) = -\sum_{j \neq h} dA_{hj}(u)$. The two
-methods differ in how the hazard increments $dA(u)$ are estimated.
+The Aalen-Johansen baseline is separate: it uses calendar-time risk sets and a
+product integral from the recorded common study origin.
 
 ### Aalen-Johansen Estimator (Nonparametric Baseline)
 
-The Aalen-Johansen (AJ) estimator is the nonparametric generalization of the
-Kaplan-Meier estimator to multistate models under the Markov assumption. It
-estimates hazard increments from the data directly via the Nelson-Aalen
-formula:
+The Aalen-Johansen (AJ) estimator uses calendar-time risk sets and a product
+integral from the common baseline. RFmstate exposes point estimates as a
+descriptive population benchmark; it does not use AJ as the covariate-free
+form of the clock-reset forest solver. It estimates hazard increments via the
+Nelson--Aalen formula:
 
 $$d\hat{A}_{hj}(u) = \frac{dN_{hj}(u)}{Y_h(u)}$$
 
@@ -235,28 +332,28 @@ per-origin-state competing risks problems:
 
 1. **For each transient state** $h$, identify all outgoing transitions
 2. **Fit a cause-specific RSF**: For each destination state $j$, fit a
-   random survival forest treating transition $h \to j$ as the event of
-   interest and all other transitions as censored
-3. **Extract cumulative hazards**: Convert each forest's predicted survival
-   function $\hat{S}_{hj}(t|\mathbf{x})$ to a cumulative hazard via
-   $\hat{H}_{hj}(t|\mathbf{x}) = -\log \hat{S}_{hj}(t|\mathbf{x})$
-4. **Assemble via product-integral**: Compute hazard increments from the
-   predicted cumulative hazards and apply the product-integral formula to
-   obtain the full transition probability matrix $P(s,t|\mathbf{x})$
+   random survival forest treating transition $h \to j$ as the target event.
+   Other observed exits end the origin-state risk interval and receive a
+   non-target indicator; they are competing events, not loss to follow-up
+3. **Extract cumulative hazards**: Use ranger's predicted cumulative hazard
+   for each declared edge on its observed duration support
+4. **Assemble by convolution**: combine state-entry masses, origin-state
+   sojourn survival, and cause-specific next-exit distributions in topological
+   order
 
 This approach leverages the flexibility of random forests to capture
 nonlinear covariate effects and interactions while maintaining the
-interpretability of the multistate framework. The product-integral step
-ensures that the resulting transition probability matrices are coherent
-(rows sum to one, non-negative entries).
+interpretability of the approved acyclic, non-recurrent multistate scope.
+Analytic, probability-invariant, and grid-refinement checks validate the
+numerical approximation without clipping or row normalization.
 
 ### Diagnostics
 
 - **OOB Error**: Out-of-bag prediction error from the random forest ensemble
-- **C-index**: Concordance between predicted risk and observed event ordering
-- **Brier Score**: Calibrated prediction error combining bias and variance
-- **Bias-Variance Decomposition**: Systematic vs. random components of
-  prediction error
+- **Edge OOB C-index**: genuine ranger OOB concordance for each binary
+  cause-specific endpoint; it is not a full-model validation score
+- **Full-state Brier/IBS**: IPCW scores from patient-level held-out complete
+  pipeline predictions
 
 ## References
 
@@ -268,3 +365,15 @@ ensures that the resulting transition probability matrices are coherent
 - Putter, H., Fiocco, M. & Geskus, R.B. (2007). Tutorial in biostatistics:
   Competing risks and multi-state models. *Statistics in Medicine*, 26,
   2389-2430.
+
+## Reproducibility
+
+This vignette renders from its source in a clean package checkout. It uses no
+external `comparison_results.rds`, private cache, or precomputed numerical
+result. Every displayed table and figure is generated by the code block that
+immediately precedes it using the canonical configuration declared in the
+hidden setup chunk. `sessionInfo()` records the rendering environment below.
+
+```{r session-info}
+sessionInfo()
+```
